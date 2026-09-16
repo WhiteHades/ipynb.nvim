@@ -9,6 +9,7 @@ import nbformat
 import pynvim
 
 ROOT = Path(__file__).resolve().parents[1]
+(ROOT / ".tmp").mkdir(exist_ok=True)
 
 
 def wait(nvim, predicate, label):
