@@ -1,0 +1,75 @@
+*ipynb.txt*  jupyter notebooks in neovim
+
+install                                                        *ipynb*
+
+use lazy.nvim's package spec, including on lazyvim: >lua
+  { "WhiteHades/ipynb.nvim", version = "0.1.0", lazy = false, opts = {} }
+<
+:Lazy sync installs lua dependencies and the managed python environment.
+restart after installation or an update to the bundled python runtime.
+:IpynbInstall repairs the managed environment. :checkhealth ipynb checks setup.
+
+configuration                                              *ipynb-options*
+
+all options are optional. do not set python unless using an existing environment.
+>lua
+  opts = {
+    python = "/path/to/venv/bin/python",
+    jupytext = "/path/to/venv/bin/jupytext",
+    kernel = "python3",
+    kernel_python = "/path/to/project/.venv/bin/python",
+    images = false,
+    numpy_legacy_repr = true,
+    keymaps = true,
+    auto_init = true,
+    output = { preview_lines = 8, height = 12, width = 100 },
+  }
+<
+python hosts the remote plugin. kernel selects a registered jupyter kernel;
+otherwise the notebook's kernelspec is used. kernel_python optionally configures
+pyright for notebook buffers. it does not select the execution kernel.
+completion and diagnostics use your existing python language server setup.
+
+numpy_legacy_repr uses numpy's legacy="1.25" setting in new local python kernels.
+it changes display, not values or dtypes. external kernels keep their own setup.
+previously saved outputs retain their original text until those cells run again.
+
+custom runtimes must provide requirements.txt themselves. the build step checks
+them and registers the remote plugin without changing their python packages.
+set build=false to manage registration yourself with :UpdateRemotePlugins.
+an existing g:python3_host_prog is respected. register project kernels with ipykernel.
+
+without lazy.nvim, install the dependencies listed in lazy.lua with your package
+manager, put this plugin on runtimepath, call require('ipynb').init(opts) before
+python providers load, then require('ipynb').setup(opts). install the markdown,
+markdown_inline and python treesitter parsers and run :UpdateRemotePlugins.
+
+the bundled runtime uses Ipynb commands and its own python and lua namespaces.
+it does not register or replace Molten commands from a separate installation.
+
+saving                                                       *ipynb-saving*
+
+:w converts the editable markdown back to ipynb before exporting cell outputs.
+reopening imports stored outputs without executing cells. kernel memory is not
+stored in the notebook. model checkpoints remain the framework's responsibility.
+
+keys                                                           *ipynb-keys*
+
+:Ipynb         open the notebook action menu
+<localleader>n  open the same menu
+<C-CR>         run cell
+<S-CR>         run cell and move to the next code cell
+<localleader>b  insert code cell below
+<localleader>m  insert markdown cell below
+<localleader>s  interrupt execution
+<localleader>r  run cell or visual selection
+<localleader>R  run all cells
+<localleader>a  run cell and above
+<localleader>o  open and focus output; normal vim motions scroll it
+<localleader>O  close output; q and <Esc> also work inside the output window
+<localleader>x  rich output
+<localleader>i  restart kernel; keep displayed outputs
+
+existing mappings are not replaced. keymaps=false disables notebook mappings.
+
+ vim:tw=78:ts=8:ft=help:norl:
