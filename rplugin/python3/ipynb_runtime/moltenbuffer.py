@@ -153,7 +153,7 @@ class IpynbKernel:
         return True
 
     def open_image_popup(self, silent=False) -> bool:
-        """Open the current image outputs in a floating window
+        """Open the first image of the current cell in the terminal viewer
         Returns: True if we're in a cell, False otherwise"""
         self.selected_cell = self._get_selected_span()
         if self.selected_cell is None:
@@ -162,6 +162,9 @@ class IpynbKernel:
         output = self.outputs[self.selected_cell].output
         for chunk in output.chunks:
             if isinstance(chunk, ImageOutputChunk):
+                if self.options.image_provider == "image.nvim":
+                    self.nvim.exec_lua("require('ipynb.image_viewer').open(...)", chunk.img_path)
+                    return True
                 try:
                     from PIL import Image
 

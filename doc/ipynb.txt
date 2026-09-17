@@ -67,9 +67,23 @@ keys                                                           *ipynb-keys*
 <localleader>a  run cell and above
 <localleader>o  open and focus output; normal vim motions scroll it
 <localleader>O  close output; q and <Esc> also work inside the output window
-<localleader>x  rich output
+<localleader>x  open the first image in the terminal viewer
 <localleader>i  restart kernel; keep displayed outputs
 
-existing mappings are not replaced. keymaps=false disables notebook mappings.
+existing keyboard mappings are not replaced. keymaps=false disables notebook keys.
+
+images                                                        *ipynb-images*
+
+image.nvim outputs fit their available space, including enlarging small images.
+inline images use at most 80% of the content width and 60% of the available
+height, preserving aspect ratio. image.nvim's smaller size limits still apply.
+output.height and output.width optionally cap the full output window.
+
+with :set mouse=a, click an image in normal or insert mode to open just that
+image in a centered terminal viewer. :IpynbImagePopup and <localleader>x open the first image in the current
+cell. the viewer fits within 85% of the editor, resizes with the terminal, and
+closes with q or <Esc>. existing mouse mappings take precedence.
+it does not require a desktop image application.
+other image providers retain their existing external popup behavior.
 
  vim:tw=78:ts=8:ft=help:norl:

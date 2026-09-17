@@ -21,6 +21,7 @@ from PIL import Image
 from ipynb_runtime import Ipynb
 from ipynb_runtime.images import ImageNvimCanvas, NoCanvas
 from ipynb_runtime.options import IpynbOptions
+from ipynb_runtime.moltenbuffer import IpynbKernel
 from ipynb_runtime.outputbuffer import OutputBuffer
 from ipynb_runtime.outputchunks import ImageOutputChunk, OutputStatus, TextOutputChunk, to_outputchunk
 
@@ -99,6 +100,54 @@ class ImageOutputTests(unittest.TestCase):
         return self.nvim.api.buf_get_extmark_by_id(
             self.anchor.bufno, self.output.extmark_namespace, self.output.virt_text_id, {"details": True}
         )[2]["virt_lines"]
+
+    def test_small_plot_enlarges_to_bounded_inline_area(self):
+        chunk = ImageOutputChunk("small")
+        self.output.output.chunks = [chunk]
+        self.output.show_virtual_output(self.anchor)
+        size = self.canvas.img_size(chunk.img_identifier)
+        self.assertGreater(size["width"], 40)
+        self.assertLessEqual(size["width"], int(self.nvim.current.window.width * .8))
+        self.assertLessEqual(size["height"], int(self.nvim.current.window.height * .6))
+
+    def test_popup_command_opens_first_image_without_external_viewer(self):
+        kernel = object.__new__(IpynbKernel)
+        kernel.nvim = self.nvim
+        kernel.options = self.options
+        cell = object()
+        kernel._get_selected_span = lambda: cell
+        self.output.output.chunks = [TextOutputChunk("before"), ImageOutputChunk("first"),
+                                     ImageOutputChunk("second")]
+        kernel.outputs = {cell: self.output}
+        self.nvim.exec_lua("package.loaded['ipynb.image_viewer'] = {open=function(path) opened=path end}")
+        self.assertTrue(kernel.open_image_popup())
+        self.assertEqual(self.nvim.exec_lua("return opened"), "first")
+
+    def test_click_uses_rendered_rectangle_and_leaves_text_clicks_alone(self):
+        chunk = ImageOutputChunk("small")
+        self.output.output.chunks = [chunk]
+        self.output.show_virtual_output(self.anchor)
+        result = self.nvim.exec_lua("""
+            local img = created[...]
+            img.is_rendered = true
+            img.rendered_geometry = {x=5, y=10, width=40, height=12}
+            package.loaded['ipynb.image_viewer'] = {open=function(path) opened=path end}
+            local callback
+            for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'n')) do
+              if map.lhs == '<LeftMouse>' then callback = map.callback end
+            end
+            local pos = {winid=img.window, screenrow=12, screencol=7}
+            vim.fn.getmousepos = function() return pos end
+            local hit = callback()
+            pos.screenrow = 10 -- immediately above the image
+            local miss = callback()
+            img.is_rendered = false
+            pos.screenrow = 12
+            local hidden = callback()
+            return {hit, miss, hidden}
+        """, chunk.img_identifier)
+        self.assertEqual(result, ["<Ignore>", "<LeftMouse>", "<LeftMouse>"])
+        self.assertEqual(self.nvim.exec_lua("return opened"), "small")
 
     def test_inline_image_rows_are_not_text_preview_lines(self):
         image = ImageOutputChunk("wide")
@@ -194,7 +243,7 @@ class ImageOutputTests(unittest.TestCase):
                     self.assertAlmostEqual(geometry["width"] * 10 / (geometry["height"] * 20), ratio)
         self.nvim.exec_lua("cell_pixels.cell_width=20; cell_pixels.cell_height=40")
         size = self.canvas.img_size("small")
-        self.assertEqual(size, {"width": 1, "height": 1})
+        self.assertEqual(size, {"width": 32, "height": 8})
 
     def test_terminal_response_reflows_without_mutating_provider_cache(self):
         image = ImageOutputChunk("wide")
@@ -412,6 +461,35 @@ class RealImageRendererTests(unittest.TestCase):
                 self.assertLessEqual(draw["width"], self.output.display_win.width)
                 self.assertAlmostEqual(draw["width"] * 10 / (draw["height"] * 20), 2, delta=.1)
                 self.output.clear_float_win()
+
+    def test_real_viewer_enlarges_and_restores_inline_image(self):
+        with TemporaryDirectory(dir=ROOT / ".tmp") as directory:
+            path = Path(directory) / "small.png"
+            Image.new("RGB", (100, 100), "red").save(path)
+            chunk = ImageOutputChunk(str(path))
+            self.output.output.chunks = [chunk]
+            self.output.show_virtual_output(self.anchor)
+            self.assertTrue(self.nvim.exec_lua(
+                "local id=...; return vim.wait(5000, function() return draws[id] ~= nil end)", chunk.img_identifier))
+            source = self.nvim.current.window
+            self.assertTrue(self.nvim.exec_lua("return require('ipynb.image_viewer').open(...)", str(path)))
+            viewer = self.nvim.current.window
+            self.assertNotEqual(source, viewer)
+            self.assertTrue(self.nvim.exec_lua("""
+                return vim.wait(5000, function()
+                  for _, draw in pairs(draws) do
+                    if draw.window == vim.api.nvim_get_current_win() then return true end
+                  end
+                end)
+            """))
+            self.assertNotIn(chunk.img_identifier, self.nvim.exec_lua("return draws"))
+            self.assertGreater(viewer.height, 20)
+            self.assertLessEqual(viewer.width + 2, int(self.nvim.options['columns'] * .85))
+            self.assertLessEqual(viewer.height + 2, int(self.nvim.options['lines'] * .85))
+            self.nvim.exec_lua("require('ipynb.image_viewer').close()")
+            self.assertEqual(self.nvim.current.window, source)
+            self.assertTrue(self.nvim.exec_lua(
+                "local id=...; return vim.wait(5000, function() return draws[id] ~= nil end)", chunk.img_identifier))
 
     def test_real_float_scroll_repositions_second_image(self):
         with TemporaryDirectory(dir=ROOT / ".tmp") as directory:
