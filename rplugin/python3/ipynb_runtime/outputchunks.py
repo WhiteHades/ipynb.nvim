@@ -16,7 +16,7 @@ from datetime import datetime
 from pynvim import Nvim
 
 
-from ipynb_runtime.images import Canvas
+from ipynb_runtime.images import Canvas, NoCanvas
 from ipynb_runtime.options import IpynbOptions
 from ipynb_runtime.utils import notify_error
 
@@ -90,7 +90,7 @@ class TextOutputChunk(OutputChunk):
                         splits.append(line[: win_width - col])
                         line = line[win_width - col :]
 
-                    for _ in range(len(line) // win_width):
+                    for _ in range(max(0, (len(line) - 1) // win_width)):
                         splits.append(line[index * win_width : (index + 1) * win_width])
                         index += 1
                     splits.append(line[index * win_width :])
@@ -100,7 +100,7 @@ class TextOutputChunk(OutputChunk):
             else:
                 for line in text.split("\n"):
                     if len(line) > win_width:
-                        extra_lines += len(line) // win_width
+                        extra_lines += (len(line) - 1) // win_width
 
         return text, extra_lines
 
@@ -144,6 +144,7 @@ class ImageOutputChunk(OutputChunk):
         self.img_path = img_path
         self.output_type = "display_data"
         self.img_identifier = None
+        self.img_identifiers = {}
 
     def place(
         self,
@@ -157,29 +158,41 @@ class ImageOutputChunk(OutputChunk):
         winnr: int | None = None,
         render_offset_top: int = 0,
     ) -> Tuple[str, int]:
+        self.img_identifiers.pop(virtual, None)
         loc = options.image_location
         if not (loc == "both" or (loc == "virt" and virtual) or (loc == "float" and not virtual)):
             return "", 0
 
-        image_height = 0
-        with_virtual_padding = not virtual
-
+        if isinstance(canvas, NoCanvas):
+            return self.fallback(), 0
         self.img_identifier = canvas.add_image(
             self.img_path,
-            f"{'virt-' if virtual else ''}{self.img_path}",
+            f"ipynb-{bufnr}-{id(self)}-{'virt' if virtual else 'float'}",
             0,
             lineno,
             bufnr,
             winnr,
             render_offset_top=render_offset_top,
-            with_virtual_padding=with_virtual_padding,
+            with_virtual_padding=False,
+            max_width=_shape[2],
+            max_height=max(0, _shape[3] - 2),
         )
+        if not self.img_identifier:
+            return self.fallback(), 0
         image_height = canvas.img_size(self.img_identifier)["height"]
-        # images are rendered into virtual lines following the current line,
-        # which also needs to exist as the extmark is placed there
-        if virtual:
-            return (" \n" * (image_height + 1)), 0
-        return " \n \n", image_height
+        if image_height <= 0:
+            canvas.remove_image(self.img_identifier)
+            return self.fallback(), 0
+        self.img_identifiers[virtual] = self.img_identifier
+        # Real rows in floats and output-owned virtual rows inline. Provider
+        # padding must not duplicate these or disappear from height accounting.
+        return " \n" * image_height, 0
+
+    def fallback(self) -> str:
+        plain = (self.jupyter_data or {}).get("text/plain")
+        if isinstance(plain, list):
+            plain = "".join(plain)
+        return (plain or "[Image unavailable: no usable image renderer]") + "\n"
 
 
 class OutputStatus(Enum):
@@ -250,17 +263,24 @@ def to_outputchunk(
         import base64
 
         with alloc_file(extension, "wb") as (path, file):
-            file.write(base64.b64decode(str(imgdata)))
+            if isinstance(imgdata, list):
+                imgdata = "".join(imgdata)
+            if isinstance(imgdata, str):
+                imgdata = imgdata.encode("ascii")
+            imgdata = b"".join(imgdata.split())
+            file.write(base64.b64decode(imgdata, validate=True))
         return _to_image_chunk(path)
 
     def _from_image_svgxml(svg: str) -> OutputChunk:
+        if isinstance(svg, list):
+            svg = "".join(svg)
         try:
             import cairosvg
 
             with alloc_file("png", "wb") as (path, file):
                 cairosvg.svg2png(svg, write_to=file)
             return _to_image_chunk(path)
-        except ImportError:
+        except (ImportError, ValueError):
             with alloc_file("svg", "w") as (path, file):
                 file.write(svg)  # type: ignore
             return _to_image_chunk(path)
@@ -292,6 +312,8 @@ def to_outputchunk(
             return _from_plaintext(tex)
 
     def _from_plaintext(text: str) -> OutputChunk:
+        if isinstance(text, list):
+            text = "".join(text)
         return TextLnOutputChunk(text)
 
     chunk = None
@@ -303,7 +325,8 @@ def to_outputchunk(
         ("text/latex", _from_latex),
     ]
 
-    for mimetype, process_func in special_mimetypes:
+    has_provider = getattr(options, "image_provider", "none") != "none"
+    for mimetype, process_func in special_mimetypes if has_provider else []:
         try:
             maybe_data = None
             if data is not None:
@@ -311,16 +334,20 @@ def to_outputchunk(
             if maybe_data is not None:
                 chunk = process_func(maybe_data)  # type: ignore
                 break
-        except ImportError:
+        except (ImportError, ValueError, OSError, SyntaxError):
             continue
 
-    if chunk is None and data is not None:
+    if chunk is None and data is not None and has_provider:
         # handle arbitrary images
         for mimetype in data.keys():
             match mimetype.split("/"):
                 case ["image", extension]:
-                    chunk = _from_image(extension, data[mimetype])
-                    break
+                    if extension in {"png", "jpeg", "jpg", "gif", "webp", "bmp", "tiff"}:
+                        try:
+                            chunk = _from_image(extension, data[mimetype])
+                            break
+                        except (ValueError, TypeError):
+                            continue
 
     if chunk is None:
         # fallback to plain text if there's nothing else

@@ -95,6 +95,7 @@ class Ipynb:
         self.nvim.command("autocmd CursorMoved  * call IpynbOnCursorMoved()")
         self.nvim.command("autocmd CursorMovedI * call IpynbOnCursorMoved()")
         self.nvim.command("autocmd WinScrolled  * call IpynbOnWinScrolled()")
+        self.nvim.command("autocmd WinResized,VimResized * call IpynbUpdateInterface()")
         self.nvim.command("autocmd BufEnter     * call IpynbUpdateInterface()")
         self.nvim.command("autocmd BufLeave     * call IpynbBufLeave()")
         self.nvim.command("autocmd BufUnload    * call IpynbOnBufferUnload()")
@@ -175,6 +176,23 @@ class Ipynb:
 
         ipynb_kernels = self._get_current_buf_kernels(False)
         if ipynb_kernels is None:
+            # A focused output float is not itself a kernel buffer. Relayout
+            # through its source window after a terminal/split resize.
+            current = self.nvim.current.window
+            for kernel in self.ipynb_kernels.values():
+                for span, output in kernel.outputs.items():
+                    if output.display_win == current and output.source_window is not None:
+                        if self.nvim.api.win_is_valid(output.source_window):
+                            try:
+                                self.nvim.command(f"noautocmd call nvim_set_current_win({output.source_window})")
+                                if output.float_needs_layout():
+                                    if output.source_cursor is not None:
+                                        self.nvim.current.window.cursor = output.source_cursor
+                                    output.show_floating_win(span.end)
+                            finally:
+                                if current.valid:
+                                    self.nvim.command(f"noautocmd call nvim_set_current_win({current.handle})")
+                        return
             return
 
         for m in ipynb_kernels:

@@ -333,7 +333,7 @@ function M.init(opts)
     auto_init = true,
     numpy_legacy_repr = true,
     keymaps = true,
-    output = { preview_lines = 8, height = 12, width = 100 },
+    output = { preview_lines = 8 },
   }, opts or {})
   M.options.jupytext = M.options.jupytext or vim.fn.fnamemodify(M.options.python, ":h") .. "/jupytext"
   vim.g.python3_host_prog = M.options.python
@@ -343,7 +343,7 @@ function M.init(opts)
   vim.g.ipynb_enter_output_behavior = "open_and_enter"
   local images = M.options.images and #vim.api.nvim_list_uis() > 0
   vim.g.ipynb_image_provider = images and "image.nvim" or "none"
-  vim.g.ipynb_image_location = images and "virt" or "float"
+  vim.g.ipynb_image_location = images and "both" or "float"
   vim.g.ipynb_output_virt_lines = true
   vim.g.ipynb_output_show_more = true
   vim.g.ipynb_use_border_highlights = true
