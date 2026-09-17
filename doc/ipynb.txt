@@ -22,7 +22,7 @@ all options are optional. do not set python unless using an existing environment
     numpy_legacy_repr = true,
     keymaps = true,
     auto_init = true,
-    output = { preview_lines = 8, height = 12, width = 100 },
+    output = { preview_lines = 8 },
   }
 <
 python hosts the remote plugin. kernel selects a registered jupyter kernel;

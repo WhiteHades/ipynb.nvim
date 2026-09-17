@@ -401,7 +401,8 @@ class IpynbKernel:
         if render_selected and self.output_statuses.get(self.selected_cell) == OutputStatus.DONE:
             output = self.outputs[self.selected_cell]
             float_is_open = output.display_win is not None and output.display_win.valid
-            render_selected = selection_changed or self.should_show_floating_win != float_is_open
+            render_selected = (selection_changed or self.should_show_floating_win != float_is_open
+                               or (float_is_open and output.float_needs_layout()))
 
         if render_selected:
             self._show_selected(self.selected_cell)
@@ -425,11 +426,7 @@ class IpynbKernel:
             self.should_show_floating_win = True
 
         if self.selected_cell == new_selected_cell and new_selected_cell is not None:
-            if (
-                scrolled
-                and new_selected_cell.end.lineno < self.nvim.funcs.line("w$")
-                and self.should_show_floating_win
-            ):
+            if scrolled:
                 self.update_interface()
             return
 

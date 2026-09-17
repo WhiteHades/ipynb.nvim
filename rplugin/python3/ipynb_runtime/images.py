@@ -8,6 +8,10 @@ from ipynb_runtime.utils import notify_warn, IpynbException
 
 
 class Canvas(ABC):
+    def layout_key(self):
+        """Geometry inputs beyond the Neovim window's row/column dimensions."""
+        return None
+
     @abstractmethod
     def init(self) -> None:
         """
@@ -52,6 +56,8 @@ class Canvas(ABC):
         winnr: int | None = None,
         render_offset_top: int = 0,
         with_virtual_padding: bool = True,
+        max_width: int | None = None,
+        max_height: int | None = None,
     ) -> str:
         """
         Add an image to the canvas.
@@ -108,9 +114,11 @@ class NoCanvas(Canvas):
         _x: int,
         _y: int,
         _bufnr: int,
-        _winnr: int,
-        _render_offset_top: int = 0,
-        _with_virtual_padding: bool = True,
+        winnr: int | None = None,
+        render_offset_top: int = 0,
+        with_virtual_padding: bool = True,
+        max_width: int | None = None,
+        max_height: int | None = None,
     ) -> None:
         pass
 
@@ -133,32 +141,27 @@ class ImageNvimCanvas(Canvas):
 
     def init(self) -> None:
         self.nvim.exec_lua("_ipynb_image = require('ipynb.molten_load_image_nvim').image_api")
-        self.nvim.exec_lua("_ipynb_image_utils = require('ipynb.molten_load_image_nvim').image_utils")
         self.image_api = self.nvim.lua._ipynb_image
-        self.image_utils = self.nvim.lua._ipynb_image_utils
 
     def deinit(self) -> None:
         self.image_api.clear_all()
 
     def present(self) -> None:
-        # images to both show and hide should be ignored
-        to_work_on = self.to_make_visible.difference(
-            self.to_make_visible.intersection(self.to_make_invisible)
-        )
-        self.to_make_invisible.difference_update(self.to_make_visible)
         for identifier in self.to_make_invisible:
             self.image_api.clear(identifier)
-
-        for identifier in to_work_on:
-            size = self.img_size(identifier)
-            self.image_api.render(identifier, size)
-
+        self.visible.difference_update(self.to_make_invisible)
+        for identifier in self.to_make_visible:
+            self.image_api.render(identifier)
+        self.image_api.refresh()
         self.visible.update(self.to_make_visible)
         self.to_make_invisible.clear()
         self.to_make_visible.clear()
 
     def img_size(self, identifier: str) -> Dict[str, int]:
         return self.image_api.image_size(identifier)
+
+    def layout_key(self):
+        return self.image_api.layout_key()
 
     def add_image(
         self,
@@ -170,6 +173,8 @@ class ImageNvimCanvas(Canvas):
         winnr: int | None = None,
         render_offset_top: int = 0,
         with_virtual_padding: bool = True,
+        max_width: int | None = None,
+        max_height: int | None = None,
     ) -> str:
         img = self.image_api.from_file(
             path,
@@ -181,12 +186,17 @@ class ImageNvimCanvas(Canvas):
                 "y": y,
                 "window": winnr,
                 "render_offset_top": render_offset_top,
+                "max_width": max_width,
+                "max_height": max_height,
             },
         )
-        self.to_make_visible.add(img)
+        if img:
+            self.to_make_invisible.discard(img)
+            self.to_make_visible.add(img)
         return img
 
     def remove_image(self, identifier: str) -> None:
+        self.to_make_visible.discard(identifier)
         self.to_make_invisible.add(identifier)
 
 
@@ -246,14 +256,16 @@ class WeztermCanvas(Canvas):
         _x: int,
         _y: int,
         _bufnr: int,
-        _winnr: int,
-        _render_offset_top: int = 0,
-        _with_virtual_padding: bool = True,
+        winnr: int | None = None,
+        render_offset_top: int = 0,
+        with_virtual_padding: bool = True,
+        max_width: int | None = None,
+        max_height: int | None = None,
     ) -> str | dict[str, str]:
         """Adds an image to the queue to be rendered by Wezterm via the place method"""
         img = {"path": path, "id": identifier}
         self.to_make_visible.add(img["path"])
-        return img
+        return img["path"]
 
     def remove_image(self, identifier: str) -> None:
         pass
@@ -315,6 +327,10 @@ class SnacksCanvas(Canvas):
         y: int,
         bufnr: int,
         winnr: int | None = None,
+        render_offset_top: int = 0,
+        with_virtual_padding: bool = True,
+        max_width: int | None = None,
+        max_height: int | None = None,
     ) -> str:
         img = self.snacks_api.from_file(
             path,
@@ -323,6 +339,10 @@ class SnacksCanvas(Canvas):
                 "buffer": bufnr,
                 "x": x,
                 "y": y + 1,
+                "window": winnr,
+                "render_offset_top": render_offset_top,
+                "max_width": max_width,
+                "max_height": max_height,
             },
         )
         self.to_make_visible.add(img)
