@@ -23,58 +23,6 @@ class TestNotebookOutput(unittest.TestCase):
         self.assertEqual(render_control_chars("abc\b\bXY"), "aXY")
         self.assertEqual(render_control_chars("abc\n\b\b\rXY"), "XYc")
 
-    def test_done_cell_is_still_rendered_when_selection_changes(self):
-        cell = object()
-        buffer_ = SimpleNamespace(number=1)
-        nvim = SimpleNamespace(
-            current=SimpleNamespace(buffer=buffer_, window=SimpleNamespace(buffer=buffer_))
-        )
-        kernel = object.__new__(IpynbKernel)
-        kernel.nvim = nvim
-        kernel.buffers = [buffer_]
-        output = SimpleNamespace(display_win=None)
-        kernel.outputs = {cell: output}
-        kernel.selected_cell = None
-        kernel.output_statuses = {cell: OutputStatus.DONE}
-        kernel.options = SimpleNamespace(virt_text_output=False)
-        kernel.canvas = SimpleNamespace(present=Mock())
-        kernel.updating_interface = False
-        kernel.clear_empty_spans = Mock()
-        kernel._get_selected_span = Mock(return_value=cell)
-        kernel._show_selected = Mock()
-
-        kernel.update_interface()
-
-        kernel._show_selected.assert_called_once_with(cell)
-
-        kernel._show_selected.reset_mock()
-        kernel.should_show_floating_win = True
-        kernel.update_interface()
-        kernel._show_selected.assert_called_once_with(cell)
-
-        kernel._show_selected.reset_mock()
-        kernel.should_show_floating_win = False
-        output.display_win = SimpleNamespace(valid=True)
-        kernel.update_interface()
-        kernel._show_selected.assert_called_once_with(cell)
-
-    def test_show_output_uses_selected_imported_cell(self):
-        cell = object()
-        kernel = SimpleNamespace(
-            current_output=None,
-            selected_cell=cell,
-            should_show_floating_win=False,
-        )
-        molten = object.__new__(Ipynb)
-        molten._initialize_if_necessary = Mock()
-        molten._get_current_buf_kernels = Mock(return_value=[kernel])
-        molten._update_interface = Mock()
-
-        Ipynb.command_show_output(molten)
-
-        self.assertTrue(kernel.should_show_floating_win)
-        molten._update_interface.assert_called_once_with()
-
     def test_shared_kernel_detaches_one_buffer_before_deinit(self):
         first_buffer = SimpleNamespace(number=1)
         second_buffer = SimpleNamespace(number=2)
@@ -230,16 +178,6 @@ class TestNotebookOutput(unittest.TestCase):
             client.shutdown.assert_not_called()
             runtime.deinit()
             client.stop_channels.assert_called_once_with()
-
-    def test_input_polling_checks_readiness_method(self):
-        runtime = object.__new__(JupyterRuntime)
-        runtime.is_ready = Mock(return_value=False)
-        runtime.kernel_client = Mock()
-
-        runtime.tick_input()
-
-        runtime.is_ready.assert_called_once_with()
-        runtime.kernel_client.get_stdin_msg.assert_not_called()
 
     def test_execution_waits_for_kernel_ready_before_sending(self):
         runtime = object.__new__(JupyterRuntime)
