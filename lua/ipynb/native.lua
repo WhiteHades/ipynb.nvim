@@ -473,8 +473,8 @@ function M.call(name, args, bang)
     vim.api.nvim_win_set_cursor(0, { target[1] + 1, target[2] })
     return
   end
-  if name == "IpynbHideOutput" then return ui().hide() end
-  if name == "IpynbBufLeave" then return ui().hide() end
+  if name == "IpynbHideOutput" then return ui().hide(true) end
+  if name == "IpynbBufLeave" then return ui().hide(false) end
   if name == "IpynbOnCursorMoved" or name == "IpynbOnWinScrolled" or name == "IpynbUpdateInterface" then
     if ui().refresh then ui().refresh(vim.api.nvim_get_current_buf()) end
     return
