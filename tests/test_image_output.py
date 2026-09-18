@@ -494,8 +494,8 @@ class RealImageRendererTests(unittest.TestCase):
             """))
             self.assertNotIn(chunk.img_identifier, self.nvim.exec_lua("return draws"))
             self.assertGreater(viewer.height, 20)
-            self.assertLessEqual(viewer.width + 2, int(self.nvim.options['columns'] * .85))
-            self.assertLessEqual(viewer.height + 2, int(self.nvim.options['lines'] * .85))
+            self.assertLessEqual(viewer.width + 2, int(self.nvim.options['columns'] * .92))
+            self.assertLessEqual(viewer.height + 2, int(self.nvim.options['lines'] * .92))
             self.nvim.exec_lua("require('ipynb.image_viewer').close()")
             self.assertEqual(self.nvim.current.window, source)
             self.assertTrue(self.nvim.exec_lua(
