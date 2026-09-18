@@ -12,6 +12,8 @@ end
 
 local function fast_path(jupytext, path)
   return local_notebook(path)
+    and vim.fn.exists("*IpynbNotebookRead") == 1
+    and vim.fn.exists("*IpynbNotebookWrite") == 1
     and option(jupytext, "format") == "md:markdown"
     and option(jupytext, "autosync") == false
     and option(jupytext, "async_write") == false
