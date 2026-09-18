@@ -132,6 +132,16 @@ function M.check()
   local python = options.python or "python3"
   local jupytext = options.jupytext or "jupytext"
   local kernel_python = options.kernel_python
+  local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
+  local binary = options.binary or root .. "/native/target/release/ipynb-engine"
+  local native = options.backend ~= "python" and vim.fn.executable(binary) == 1
+  if native then
+    vim.health.ok("Rust notebook engine: " .. binary)
+  elseif options.backend == "python" then
+    vim.health.info("Python compatibility backend selected")
+  else
+    vim.health.warn("Rust engine is not built; run :IpynbInstall. Python compatibility backend is active.")
+  end
 
   local python_ok = report_command("python", python, true)
   report_command("jupytext", jupytext, true)
@@ -160,9 +170,15 @@ function M.check()
       { "numpy", "numpy" },
       { "matplotlib", "matplotlib" },
     }) do
-      report_import(python, dependency[1], dependency[2])
+      if native and dependency[2] == "pynvim" then
+        vim.health.info("Rust backend does not use the Python remote host")
+      else
+        report_import(python, dependency[1], dependency[2])
+      end
     end
-    if vim.env.IPYNB_DISABLE_RUST == "1" then
+    if native then
+      vim.health.info("Notebook JSON uses Rust serde_json")
+    elseif vim.env.IPYNB_DISABLE_RUST == "1" then
       vim.health.info("Rust JSON parser is disabled; using Python")
     elseif run_import(python, "jiter") then
       vim.health.ok("Rust JSON parser (jiter) is available")
