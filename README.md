@@ -17,7 +17,7 @@ terminal such as kitty or ghostty. `uv` is optional and speeds up python setup.
 
    ```lua
    return {
-     { "WhiteHades/ipynb.nvim", version = "0.1.0", lazy = false, opts = {} },
+     { "WhiteHades/ipynb.nvim", lazy = false, opts = {} },
    }
    ```
 
