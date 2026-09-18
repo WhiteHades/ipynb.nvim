@@ -312,14 +312,23 @@ local function border_size(border)
   return present(8) + present(4), present(2) + present(6)
 end
 
-local function border_with_highlight(border, cell)
-  if not options.use_border_highlights or type(border) ~= "table" then return border end
+local function border_group(cell)
   local group = "IpynbOutputBorder"
-  if cell.data.success == false then
+  if cell.data.status == "hold" then
+    group = "IpynbOutputBorderQueued"
+  elseif cell.data.status == "running" then
+    group = "IpynbOutputBorderRunning"
+  elseif cell.data.status == "done" and cell.data.success == false then
     group = "IpynbOutputBorderFail"
   elseif cell.data.status == "done" then
     group = "IpynbOutputBorderSuccess"
   end
+  return group
+end
+
+local function border_with_highlight(border, cell)
+  if not options.use_border_highlights or type(border) ~= "table" then return border end
+  local group = border_group(cell)
   border = vim.deepcopy(border)
   for index, value in ipairs(border) do
     border[index] = type(value) == "table" and { value[1], group } or { value, group }
@@ -568,7 +577,10 @@ local function show_virtual(cell, force)
     height = info.height,
   }, cell.buf, win, true)
   local virt_lines = {}
-  for _, line in ipairs(lines) do virt_lines[#virt_lines + 1] = { { line, "IpynbVirtualText" } } end
+  for index, line in ipairs(lines) do
+    local group = (index == 1 or index == #lines) and border_group(cell) or "IpynbVirtualText"
+    virt_lines[#virt_lines + 1] = { { line, group } }
+  end
   local mark_options = { virt_lines = virt_lines, strict = false }
   if cell.ui.virt_mark then mark_options.id = cell.ui.virt_mark end
   cell.ui.virt_mark = vim.api.nvim_buf_set_extmark(cell.buf, output_ns, anchor.line, 0, mark_options)
@@ -640,6 +652,15 @@ local function render_float(cell, focus)
   available_width = available_width - gutter
   if available_width < 1 or available_height < 1 then return false end
 
+  local float_key = table.concat({
+    cell.revision, config_revision, source, end_pos.line, end_pos.col,
+    info.width, info.height, info.topline,
+  }, ":")
+  if float and valid_win(float.win) and cell.ui.float_key == float_key then
+    if focus then vim.cmd(("noautocmd call nvim_set_current_win(%d)"):format(float.win)) end
+    return true
+  end
+
   local display_buf = float and float.buf
   local previous_cursor
   local was_at_bottom = false
@@ -702,8 +723,9 @@ local function render_float(cell, focus)
     float = { buf = display_buf, win = win, source_win = source }
     cell.ui.float = float
     set_float_options(win)
-    vim.keymap.set("n", "q", M.hide, { buffer = display_buf, silent = true, nowait = true })
-    vim.keymap.set("n", "<Esc>", M.hide, { buffer = display_buf, silent = true, nowait = true })
+    local hide = function() M.hide(false, cell.id) end
+    vim.keymap.set("n", "q", hide, { buffer = display_buf, silent = true, nowait = true })
+    vim.keymap.set("n", "<Esc>", hide, { buffer = display_buf, silent = true, nowait = true })
   end
 
   if previous_cursor then
@@ -720,7 +742,7 @@ local function render_float(cell, focus)
   for _, record in ipairs(image_records(cell, "float")) do pcall(record.api.render, record.id) end
   local api = provider()
   if api.refresh then pcall(api.refresh) end
-  cell.ui.float_key = table.concat({ cell.revision, config_revision, source, info.width, info.height, info.topline }, ":")
+  cell.ui.float_key = float_key
   if focus and valid_win(float.win) then
     vim.cmd(("noautocmd call nvim_set_current_win(%d)"):format(float.win))
   end
@@ -802,6 +824,7 @@ function M.sync(buf, cells)
       local normalized = vim.deepcopy(incoming)
       normalized.id, normalized.buf = incoming.id, buf
       local changed = not cell or not vim.deep_equal(cell.data, normalized)
+      local previous_status = cell and cell.data and cell.data.status or nil
       if not cell then
         local begin_pos = normalize_position(incoming.begin)
         local end_pos = normalize_position(incoming["end"])
@@ -819,6 +842,10 @@ function M.sync(buf, cells)
         state.by_id[key] = cell
       end
       cell.data = normalized
+      if cell.ui.hidden and previous_status ~= normalized.status
+        and (normalized.status == "hold" or normalized.status == "running") then
+        cell.ui.hidden = false
+      end
       if changed then
         cell.revision = cell.revision + 1
         cell.ui.virt_key, cell.ui.float_key = nil, nil
@@ -911,22 +938,31 @@ function M.open(cell_id)
   local behavior = options.enter_output_behavior
   local existed = cell.ui.float and valid_win(cell.ui.float.win)
   if not existed and behavior == "no_open" then return false end
+  cell.ui.hidden = false
   local focus = existed or behavior == "open_and_enter"
   return render_float(cell, focus)
 end
 
 function M.show(cell_id)
   local cell = find_cell(cell_id)
-  return cell and render_float(cell, false) or false
+  if not cell then return false end
+  cell.ui.hidden = false
+  return render_float(cell, false)
 end
 
-function M.hide()
+function M.hide(explicit, cell_id)
   local hidden = false
+  local target = explicit and find_cell(cell_id) or nil
+  if target then
+    target.ui.hidden = true
+    clear_virtual(target)
+    hidden = true
+  end
   for _, state in pairs(buffers) do
     for _, cell in ipairs(state.order) do
       if cell.ui.float and valid_win(cell.ui.float.win) then
         hidden = close_float(cell, true) or hidden
-        show_virtual(cell, true)
+        if not cell.ui.hidden then show_virtual(cell, true) end
       end
     end
   end
@@ -1025,7 +1061,7 @@ end
 function M.refresh(buf)
   buf = number(buf, vim.api.nvim_get_current_buf())
   if buffers[buf] then
-    refresh(buf, true)
+    refresh(buf, false)
     return
   end
   for _, state in pairs(buffers) do
