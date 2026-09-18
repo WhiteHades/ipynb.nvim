@@ -381,8 +381,15 @@ function M.install()
   else
     vim.cmd("TSInstallSync markdown markdown_inline python")
   end
-  vim.cmd("runtime! plugin/rplugin.vim")
-  vim.cmd("UpdateRemotePlugins")
+  if M.options.backend == "python" then
+    vim.cmd("runtime! plugin/rplugin.vim")
+    vim.cmd("UpdateRemotePlugins")
+  else
+    if vim.fn.executable("cargo") ~= 1 then error("install Rust with rustup, then run :IpynbInstall again") end
+    local result = vim.system({ "cargo", "build", "--release", "--locked" },
+      { cwd = root .. "/native", text = true }):wait()
+    if result.code ~= 0 then error("Rust engine build failed: " .. (result.stderr or result.stdout)) end
+  end
   vim.notify("notebook runtime installed. restart neovim before opening notebooks.")
 end
 
@@ -400,6 +407,7 @@ function M.setup(opts)
     update = true,
     async_write = false,
   })
+  require("ipynb.native").setup(M.options)
   require("ipynb.notebook_io").setup(require("jupytext"))
   local group = vim.api.nvim_create_augroup("ipynb", { clear = true })
   local function autocmd(events, callback)
@@ -413,6 +421,10 @@ function M.setup(opts)
   end)
   autocmd("InsertEnter", function(ev) require("ipynb.markdown").disable(ev.buf) end)
   autocmd("BufWritePost", function(ev)
+    if vim.b[ev.buf].ipynb_native_write then
+      vim.b[ev.buf].ipynb_native_write = nil
+      return
+    end
     if vim.fn.filereadable(vim.api.nvim_buf_get_name(ev.buf)) == 0 then return end
     -- jupytext suppresses autocmd errors, so report export failures explicitly.
     local ok, err = pcall(vim.api.nvim_buf_call, ev.buf, function()
