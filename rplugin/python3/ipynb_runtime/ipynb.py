@@ -284,7 +284,11 @@ def export_outputs(nvim: Nvim, kernel: IpynbKernel, filepath: str, overwrite: bo
 
 def compare_contents(nvim: Nvim, nb_cell, code_cell: CodeCell, lang: str) -> bool:
     ipynb_contents = code_cell.get_text(nvim)
-    nvim.exec_lua("_ipynb_remove_comments = require('ipynb.molten_remove_comments').remove_comments")
-    clean_nb = nvim.lua._ipynb_remove_comments(nb_cell["source"] + "\n", lang)
-    clean_molten = nvim.lua._ipynb_remove_comments(ipynb_contents + "\n", lang)
-    return clean_nb == clean_molten
+    if nb_cell["source"] == ipynb_contents:
+        return True
+    return nvim.exec_lua(
+        "local left, right, lang = ...; "
+        "local clean = require('ipynb.molten_remove_comments').remove_comments; "
+        "return clean(left, lang) == clean(right, lang)",
+        nb_cell["source"] + "\n", ipynb_contents + "\n", lang,
+    )
