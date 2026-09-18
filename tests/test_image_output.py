@@ -107,8 +107,18 @@ class ImageOutputTests(unittest.TestCase):
         self.output.show_virtual_output(self.anchor)
         size = self.canvas.img_size(chunk.img_identifier)
         self.assertGreater(size["width"], 40)
-        self.assertLessEqual(size["width"], int(self.nvim.current.window.width * .8))
-        self.assertLessEqual(size["height"], int(self.nvim.current.window.height * .6))
+        self.assertLessEqual(size["width"], int(self.nvim.current.window.width * .9))
+        self.assertLessEqual(size["height"], int(self.nvim.current.window.height * .75))
+
+    def test_inline_height_is_not_limited_by_markdown_percentage(self):
+        chunk = ImageOutputChunk("tall")
+        self.output.output.chunks = [chunk]
+        self.output.show_virtual_output(self.anchor)
+        self.nvim.exec_lua("created[...].global_state.options.max_height_window_percentage=50", chunk.img_identifier)
+        self.output._virtual_shape = None
+        self.output.show_virtual_output(self.anchor)
+        size = self.canvas.img_size(chunk.img_identifier)
+        self.assertEqual(size["height"], int((self.nvim.current.window.height - 2) * .75))
 
     def test_popup_command_opens_first_image_without_external_viewer(self):
         kernel = object.__new__(IpynbKernel)

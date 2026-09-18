@@ -75,8 +75,9 @@ existing keyboard mappings are not replaced. keymaps=false disables notebook key
 images                                                        *ipynb-images*
 
 image.nvim outputs fit their available space, including enlarging small images.
-inline images use at most 80% of the content width and 60% of the available
-height, preserving aspect ratio. image.nvim's smaller size limits still apply.
+inline images use at most 90% of the content width and 75% of the available
+height, preserving aspect ratio. Markdown's percentage caps do not apply to
+notebook previews; image.nvim's absolute max_width/max_height limits still do.
 output.height and output.width optionally cap the full output window.
 
 with :set mouse=a, click an image in normal or insert mode to open just that
