@@ -30,9 +30,23 @@ const MESSAGE_DELIMITER: &[u8] = b"<IDS|MSG>";
 const PROTOCOL_VERSION: &str = "5.3";
 const NUMPY_STARTUP: &str = "exec('''try:\n    import numpy\nexcept ImportError:\n    pass\nelse:\n    if int(numpy.__version__.split('.')[0]) >= 2:\n        numpy.set_printoptions(legacy='1.25')\n''', {})";
 
+fn command_wakeup(context: &zmq::Context) -> Result<(zmq::Socket, zmq::Socket)> {
+    let endpoint = format!("inproc://ipynb-command-{}", Uuid::new_v4());
+    let receiver = context.socket(zmq::PAIR)?;
+    receiver.set_linger(0)?;
+    receiver.set_rcvhwm(1)?;
+    receiver.bind(&endpoint)?;
+    let sender = context.socket(zmq::PAIR)?;
+    sender.set_linger(0)?;
+    sender.set_sndhwm(1)?;
+    sender.connect(&endpoint)?;
+    Ok((sender, receiver))
+}
+
 /// A running Jupyter kernel.
 pub struct Kernel {
     commands: Sender<CommandMessage>,
+    wake: Option<zmq::Socket>,
     events: Receiver<Value>,
     worker: Mutex<Option<JoinHandle<()>>>,
     closed: AtomicBool,
@@ -49,6 +63,14 @@ impl Kernel {
         numpy_legacy_repr: bool,
         spec_path: Option<&Path>,
     ) -> Result<Self> {
+        let (wake, context, wake_receiver) =
+            if name.starts_with("http://") || name.starts_with("https://") {
+                (None, None, None)
+            } else {
+                let context = zmq::Context::new();
+                let (wake, receiver) = command_wakeup(&context)?;
+                (Some(wake), Some(context), Some(receiver))
+            };
         let prepared = prepare_kernel(name, python, numpy_legacy_repr, spec_path)?;
         let restartable = prepared.restartable();
         let language = prepared.language();
@@ -56,11 +78,12 @@ impl Kernel {
         let (event_tx, event_rx) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("ipynb-jupyter-kernel".to_string())
-            .spawn(move || worker_main(prepared, command_rx, event_tx))
+            .spawn(move || worker_main(prepared, command_rx, event_tx, context, wake_receiver))
             .context("spawn Jupyter kernel worker")?;
 
         Ok(Self {
             commands: command_tx,
+            wake,
             events: event_rx,
             worker: Mutex::new(Some(worker)),
             closed: AtomicBool::new(false),
@@ -86,6 +109,7 @@ impl Kernel {
                 code: code.to_string(),
             })
             .context("send execute request to kernel worker")?;
+        self.notify_worker();
         Ok(msg_id)
     }
 
@@ -95,6 +119,7 @@ impl Kernel {
         self.commands
             .send(CommandMessage::Input(value.to_string()))
             .context("send stdin reply to kernel worker")?;
+        self.notify_worker();
         Ok(())
     }
 
@@ -104,6 +129,7 @@ impl Kernel {
         self.commands
             .send(CommandMessage::Interrupt)
             .context("send interrupt request to kernel worker")?;
+        self.notify_worker();
         Ok(())
     }
 
@@ -118,6 +144,7 @@ impl Kernel {
         self.commands
             .send(CommandMessage::Restart)
             .context("send restart request to kernel worker")?;
+        self.notify_worker();
         Ok(())
     }
 
@@ -129,6 +156,7 @@ impl Kernel {
         self.commands
             .send(CommandMessage::Shutdown)
             .context("send shutdown request to kernel worker")?;
+        self.notify_worker();
         self.join_worker()
     }
 
@@ -152,6 +180,14 @@ impl Kernel {
         }
     }
 
+    fn notify_worker(&self) {
+        if let Some(wake) = &self.wake {
+            // The command queue remains the source of truth. A full socket is
+            // a coalesced notification, so a nonblocking send cannot lose work.
+            let _ = wake.send(&[0u8][..], zmq::DONTWAIT);
+        }
+    }
+
     fn join_worker(&self) -> Result<()> {
         let worker = self
             .worker
@@ -171,6 +207,7 @@ impl Drop for Kernel {
     fn drop(&mut self) {
         if !self.closed.swap(true, Ordering::SeqCst) {
             let _ = self.commands.send(CommandMessage::Shutdown);
+            self.notify_worker();
         }
         if let Ok(mut worker) = self.worker.lock() {
             if let Some(worker) = worker.take() {
@@ -571,7 +608,7 @@ struct ZmqTransport {
 }
 
 impl ZmqTransport {
-    fn connect(connection: ConnectionInfo) -> Result<Self> {
+    fn connect(context: &zmq::Context, connection: ConnectionInfo) -> Result<Self> {
         if connection.transport != "tcp" {
             return Err(anyhow!(
                 "unsupported Jupyter transport: {}",
@@ -584,7 +621,6 @@ impl ZmqTransport {
                 connection.signature_scheme
             ));
         }
-        let context = zmq::Context::new();
         let identity = Uuid::new_v4().to_string();
         let shell = connect_socket(
             &context,
@@ -609,7 +645,7 @@ impl ZmqTransport {
             identity.as_bytes(),
         )?;
         Ok(Self {
-            _context: context,
+            _context: context.clone(),
             shell,
             iopub,
             stdin,
@@ -973,12 +1009,18 @@ impl SessionState {
 
 struct ZmqWorker {
     transport: ZmqTransport,
+    context: zmq::Context,
+    wake: zmq::Socket,
     child: Option<Child>,
     local_config: Option<LocalConfig>,
 }
 
 impl ZmqWorker {
-    fn from_prepared(prepared: PreparedKernel) -> Result<Self> {
+    fn from_prepared(
+        prepared: PreparedKernel,
+        context: zmq::Context,
+        wake: zmq::Socket,
+    ) -> Result<Self> {
         match prepared {
             PreparedKernel::Local(local) => {
                 let LocalPrepared {
@@ -986,7 +1028,7 @@ impl ZmqWorker {
                     mut child,
                     connection,
                 } = local;
-                let transport = match ZmqTransport::connect(connection) {
+                let transport = match ZmqTransport::connect(&context, connection) {
                     Ok(transport) => transport,
                     Err(error) => {
                         let _ = child.kill();
@@ -997,12 +1039,16 @@ impl ZmqWorker {
                 };
                 Ok(Self {
                     transport,
+                    context,
+                    wake,
                     child: Some(child),
                     local_config: Some(config),
                 })
             }
             PreparedKernel::Attached { connection } => Ok(Self {
-                transport: ZmqTransport::connect(connection)?,
+                transport: ZmqTransport::connect(&context, connection)?,
+                context,
+                wake,
                 child: None,
                 local_config: None,
             }),
@@ -1033,7 +1079,7 @@ impl ZmqWorker {
             let _ = child.wait();
         }
         let (connection, mut child) = launch_local(config)?;
-        let transport = match ZmqTransport::connect(connection) {
+        let transport = match ZmqTransport::connect(&self.context, connection) {
             Ok(transport) => transport,
             Err(error) => {
                 let _ = child.kill();
@@ -1065,12 +1111,23 @@ fn worker_main(
     prepared: PreparedKernel,
     commands: Receiver<CommandMessage>,
     events: Sender<Value>,
+    context: Option<zmq::Context>,
+    wake: Option<zmq::Socket>,
 ) {
     match prepared {
         PreparedKernel::External(external) => run_external_worker(external, commands, events),
-        prepared => match ZmqWorker::from_prepared(prepared) {
-            Ok(worker) => run_zmq_worker(worker, commands, events),
-            Err(error) => emit_error(&events, "startup", error),
+        prepared => match (context, wake) {
+            (Some(context), Some(wake)) => {
+                match ZmqWorker::from_prepared(prepared, context, wake) {
+                    Ok(worker) => run_zmq_worker(worker, commands, events),
+                    Err(error) => emit_error(&events, "startup", error),
+                }
+            }
+            _ => emit_error(
+                &events,
+                "startup",
+                "local ZMQ kernel has no command wake socket",
+            ),
         },
     }
 }
@@ -1123,15 +1180,20 @@ fn run_zmq_worker(
                 }
             }
         }
+        let poll_timeout = if session.ready { 250 } else { 20 };
         let mut poll_items = [
+            worker.wake.as_poll_item(zmq::POLLIN),
             worker.transport.iopub.as_poll_item(zmq::POLLIN),
             worker.transport.shell.as_poll_item(zmq::POLLIN),
             worker.transport.stdin.as_poll_item(zmq::POLLIN),
             worker.transport.control.as_poll_item(zmq::POLLIN),
         ];
-        if let Err(error) = zmq::poll(&mut poll_items, 20) {
+        if let Err(error) = zmq::poll(&mut poll_items, poll_timeout) {
             emit_error(&events, "transport", error);
             break;
+        }
+        if poll_items[0].get_revents().contains(zmq::POLLIN) {
+            while worker.wake.recv_bytes(zmq::DONTWAIT).is_ok() {}
         }
         let sockets = [
             (&worker.transport.iopub, "iopub"),
@@ -1140,7 +1202,7 @@ fn run_zmq_worker(
             (&worker.transport.control, "control"),
         ];
         for (index, (socket, channel)) in sockets.iter().enumerate() {
-            if !poll_items[index].get_revents().contains(zmq::POLLIN) {
+            if !poll_items[index + 1].get_revents().contains(zmq::POLLIN) {
                 continue;
             }
             let frames = match socket.recv_multipart(0) {
