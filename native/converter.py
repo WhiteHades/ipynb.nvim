@@ -57,9 +57,11 @@ def _convert_request(request: dict[str, Any]) -> Any:
     source = jupytext.reads(str(request.get("text", "")), fmt="md:markdown")
     existing = request.get("existing")
     if existing is not None:
-        # combine_inputs_with_outputs requires NotebookNode attributes rather
-        # than plain dictionaries. nbformat.from_dict converts recursively.
-        output_notebook = nbformat.from_dict(existing)
+        # Disk notebooks can store source and MIME text as arrays of lines.
+        # Use nbformat's disk-to-memory conversion without another JSON parse.
+        from nbformat.v4.nbjson import JSONReader
+
+        output_notebook = JSONReader().to_notebook(existing)
         source = combine_inputs_with_outputs(source, output_notebook, fmt="md:markdown")
     return _plain(source)
 
