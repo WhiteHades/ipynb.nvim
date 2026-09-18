@@ -46,6 +46,10 @@ def output_controls(nvim):
     nvim.current.window.cursor = (next(i + 1 for i, line in enumerate(nvim.current.buffer[:])
                                        if line.startswith('print(')), 0)
     nvim.command('doautocmd CursorMoved')
+    output_count = nvim.exec_lua("""
+      local ns = vim.api.nvim_get_namespaces()['ipynb-native-output']
+      return ns and #vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, {}) or 0
+    """)
     nvim.input('\\o')
     wait(nvim, lambda: nvim.current.buffer.number != source, 'open output')
     assert 'line 39' in '\n'.join(nvim.current.buffer[:])
@@ -54,6 +58,12 @@ def output_controls(nvim):
     nvim.input('\\O')
     wait(nvim, lambda: nvim.current.buffer.number == source, 'close output')
     assert not any(nvim.api.win_get_config(w)['relative'] for w in nvim.windows)
+    if os.environ.get('IPYNB_TEST_BACKEND') == 'rust':
+        nvim.command('doautocmd CursorMoved')
+        assert nvim.exec_lua("""
+          local ns = vim.api.nvim_get_namespaces()['ipynb-native-output']
+          return #vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, {})
+        """) < output_count, 'hidden output returned after cursor movement'
 
 
 with tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='integration-') as temp:
