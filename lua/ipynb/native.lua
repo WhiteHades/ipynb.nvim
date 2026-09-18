@@ -267,7 +267,6 @@ function M.call(name, args, bang)
       p.kernel, p.shared = id, share
       if not share then user_event("IpynbInitPre") end
       local actual = M.request("init", p)
-      state = M.request("state")
       initialized = true
       if not share then
         user_event("IpynbInitPost")
@@ -294,7 +293,7 @@ function M.call(name, args, bang)
     end
     local final = final_kernels(buf)
     for _ = 1, #final do user_event("IpynbDeinitPre") end
-    if job then M.request("deinit", { buf = buf, positions = ui().positions(buf) }); state = M.request("state") end
+    if job then M.request("deinit", { buf = buf, positions = ui().positions(buf) }) end
     ui().clear(buf)
     clear_buffer_state(buf)
     if vim.api.nvim_buf_is_valid(buf) then vim.b[buf].notebook_kernel_initialized = false end
@@ -398,7 +397,6 @@ function M.call(name, args, bang)
     p.shared = args[1] == "shared"
     p.path = args[p.shared and 2 or 1] or saved_state_path()
     local result = M.request("load", p)
-    state = M.request("state")
     initialized = true
     return result
   end
