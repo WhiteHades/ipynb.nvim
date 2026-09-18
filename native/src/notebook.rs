@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use tempfile::NamedTempFile;
@@ -177,11 +177,22 @@ pub fn write_atomic(path: &Path, notebook: &Value, expected: Option<&Value>) -> 
             parent.display()
         )
     })?;
-    let mut bytes = serde_json::to_vec_pretty(notebook).context("could not serialize notebook")?;
-    bytes.push(b'\n');
-    temporary
-        .write_all(&bytes)
-        .context("could not write temporary notebook")?;
+    {
+        let mut output = BufWriter::new(temporary.as_file_mut());
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+        notebook
+            .serialize(&mut serde_json::Serializer::with_formatter(
+                &mut output,
+                formatter,
+            ))
+            .context("could not serialize notebook")?;
+        output
+            .write_all(b"\n")
+            .context("could not terminate notebook")?;
+        output
+            .flush()
+            .context("could not write temporary notebook")?;
+    }
     temporary
         .as_file()
         .sync_all()
