@@ -107,8 +107,8 @@ class ImageOutputTests(unittest.TestCase):
         self.output.show_virtual_output(self.anchor)
         size = self.canvas.img_size(chunk.img_identifier)
         self.assertGreater(size["width"], 40)
-        self.assertLessEqual(size["width"], int(self.nvim.current.window.width * .9))
-        self.assertLessEqual(size["height"], int(self.nvim.current.window.height * .75))
+        self.assertLessEqual(size["width"], int(self.nvim.current.window.width * .6))
+        self.assertLessEqual(size["height"], int(self.nvim.current.window.height * .5))
 
     def test_inline_height_is_not_limited_by_markdown_percentage(self):
         chunk = ImageOutputChunk("tall")
@@ -118,7 +118,7 @@ class ImageOutputTests(unittest.TestCase):
         self.output._virtual_shape = None
         self.output.show_virtual_output(self.anchor)
         size = self.canvas.img_size(chunk.img_identifier)
-        self.assertEqual(size["height"], int((self.nvim.current.window.height - 2) * .75))
+        self.assertEqual(size["height"], int((self.nvim.current.window.height - 2) * .5))
 
     def test_popup_command_opens_first_image_without_external_viewer(self):
         kernel = object.__new__(IpynbKernel)
@@ -494,8 +494,8 @@ class RealImageRendererTests(unittest.TestCase):
             """))
             self.assertNotIn(chunk.img_identifier, self.nvim.exec_lua("return draws"))
             self.assertGreater(viewer.height, 20)
-            self.assertLessEqual(viewer.width + 2, int(self.nvim.options['columns'] * .92))
-            self.assertLessEqual(viewer.height + 2, int(self.nvim.options['lines'] * .92))
+            self.assertLessEqual(viewer.width + 2, int(self.nvim.options['columns'] * .84))
+            self.assertLessEqual(viewer.height + 2, int(self.nvim.options['lines'] * .84))
             self.nvim.exec_lua("require('ipynb.image_viewer').close()")
             self.assertEqual(self.nvim.current.window, source)
             self.assertTrue(self.nvim.exec_lua(
