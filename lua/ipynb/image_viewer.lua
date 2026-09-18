@@ -6,7 +6,7 @@ local next_id = 0
 local autocmd_group
 
 local function limit(value)
-  return math.max(1, math.floor(value * 0.85) - 2)
+  return math.max(1, math.floor(value * 0.92) - 2)
 end
 
 local function config(width, height)
@@ -80,7 +80,9 @@ local function relayout()
 
   local max_width, max_height = limit(vim.o.columns), limit(vim.o.lines)
   if viewer.identifier then image_api.clear(viewer.identifier) end
-  local identifier = add_image(viewer, max_width, max_height)
+  -- Kitty may round a fractional pixel height up to the next terminal row.
+  -- Scale against one fewer row and keep that row inside the popup as padding.
+  local identifier = add_image(viewer, max_width, math.max(1, max_height - 1))
   if not identifier then
     close()
     return false
@@ -93,7 +95,8 @@ local function relayout()
     close()
     return false
   end
-  local width, height = math.min(image_width, max_width), math.min(image_height, max_height)
+  local width = math.min(image_width, max_width)
+  local height = math.min(image_height + 1, max_height)
   fill_buffer(viewer.buffer, height)
   vim.api.nvim_win_set_config(viewer.window, config(width, height))
   image_api.render(identifier)
