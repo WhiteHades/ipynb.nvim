@@ -1,0 +1,2 @@
+# Optional native JSON decoder; the Python decoder remains the fallback.
+jiter>=0.16,<0.18

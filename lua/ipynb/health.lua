@@ -103,7 +103,10 @@ local function report_ipynb_commands()
 
   if #missing == 0 then
     vim.health.ok("ipynb commands are available")
-    if vim.fn.exists("*IpynbNotebookRead") == 0 or vim.fn.exists("*IpynbNotebookWrite") == 0 then
+    local function registered(name)
+      return vim.fn.exists("*" .. name) == 1 or vim.fn.exists("#FuncUndefined#" .. name) == 1
+    end
+    if not registered("IpynbNotebookRead") or not registered("IpynbNotebookWrite") then
       vim.health.warn("fast notebook I/O is not registered; run :UpdateRemotePlugins and restart Neovim")
     end
     return true
@@ -158,6 +161,13 @@ function M.check()
       { "matplotlib", "matplotlib" },
     }) do
       report_import(python, dependency[1], dependency[2])
+    end
+    if vim.env.IPYNB_DISABLE_RUST == "1" then
+      vim.health.info("Rust JSON parser is disabled; using Python")
+    elseif run_import(python, "jiter") then
+      vim.health.ok("Rust JSON parser (jiter) is available")
+    else
+      vim.health.info("Optional Rust JSON parser is not installed; using Python")
     end
   end
 
