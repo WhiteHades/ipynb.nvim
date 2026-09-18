@@ -1100,6 +1100,7 @@ fn run_zmq_worker(
         return;
     }
 
+    let mut last_probe = std::time::Instant::now();
     'worker: loop {
         loop {
             match commands.try_recv() {
@@ -1113,6 +1114,23 @@ fn run_zmq_worker(
             }
         }
 
+        if last_probe.elapsed() >= Duration::from_millis(250) {
+            last_probe = std::time::Instant::now();
+            if let Some(child) = &mut worker.child {
+                if let Ok(Some(status)) = child.try_wait() {
+                    emit_error(&events, "process", format!("Kernel exited: {status}"));
+                    break;
+                }
+            }
+            // PUB subscriptions can miss the first idle message while connecting.
+            // Repeat the handshake until both shell and IOPub are responsive.
+            if !session.ready {
+                if let Err(error) = worker.transport.send_kernel_info(&session.session_id) {
+                    emit_error(&events, "shell", error);
+                    break;
+                }
+            }
+        }
         let mut poll_items = [
             worker.transport.iopub.as_poll_item(zmq::POLLIN),
             worker.transport.shell.as_poll_item(zmq::POLLIN),
@@ -1802,6 +1820,7 @@ mod tests {
         let server_stop = Arc::clone(&stop);
         let key = connection.key.clone();
         let server = thread::spawn(move || {
+            let mut first_probe = true;
             let mut poll_items = [
                 shell.as_poll_item(zmq::POLLIN),
                 control.as_poll_item(zmq::POLLIN),
@@ -1835,6 +1854,10 @@ mod tests {
                         let mut routed = vec![identity.clone()];
                         routed.extend(reply);
                         shell.send_multipart(routed, 0).unwrap();
+                        if first_probe {
+                            first_probe = false;
+                            continue; // Simulate IOPub's initial slow-joiner loss.
+                        }
                         thread::sleep(Duration::from_millis(60));
                         let status = wire_frames(
                             &key,
