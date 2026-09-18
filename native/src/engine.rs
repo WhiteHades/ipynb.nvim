@@ -440,6 +440,15 @@ impl Engine {
         ))
     }
 
+    fn read_compatible_notebook(&mut self, path: &Path) -> Result<Value> {
+        let notebook = notebook::read_json(path)?;
+        if notebook["nbformat"] == 4 {
+            return Ok(notebook);
+        }
+        let mut converted = self.converter.read(path, Path::new(""))?;
+        Ok(converted["notebook"].take())
+    }
+
     fn merge_outputs(
         &self,
         notebook: &mut Value,
@@ -539,8 +548,7 @@ impl Engine {
 
     fn export(&mut self, params: &Value) -> Result<()> {
         let path = Self::path(params)?;
-        let mut converted = self.converter.read(path, Path::new(""))?;
-        let mut notebook = converted["notebook"].take();
+        let mut notebook = self.read_compatible_notebook(path)?;
         let kernel = self.selected_kernel(params)?;
         if !self
             .cells
@@ -581,10 +589,7 @@ impl Engine {
             {
                 notebook
             }
-            _ => {
-                let mut converted = self.converter.read(path, Path::new(""))?;
-                converted["notebook"].take()
-            }
+            _ => self.read_compatible_notebook(path)?,
         };
         let buf = params["buf"].as_u64().unwrap_or(0);
         let kernel = self.selected_kernel(params)?;
