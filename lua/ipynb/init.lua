@@ -37,15 +37,20 @@ end
 local function apply_notebook_output_highlights()
   local info = highlight_or_nil("DiagnosticInfo")
   local err = highlight_or_nil("DiagnosticError")
+  local warn = highlight_or_nil("DiagnosticWarn")
+  local success = highlight_or_nil("DiagnosticOk")
+  local muted = highlight_or_nil("Comment")
   local normal_float = highlight_or_nil("NormalFloat")
   local float_border = highlight_or_nil("FloatBorder")
 
-  local info_fg = info.fg or float_border.fg
-  local err_fg = err.fg or info_fg
+  local info_fg = info.fg or 0x61afef
+  local err_fg = err.fg or 0xe06c75
   local float_bg = normal_float.bg
 
-  vim.api.nvim_set_hl(0, "IpynbOutputBorder", { fg = info_fg, bg = float_bg, bold = true })
-  vim.api.nvim_set_hl(0, "IpynbOutputBorderSuccess", { fg = info_fg, bg = float_bg, bold = true })
+  vim.api.nvim_set_hl(0, "IpynbOutputBorder", { fg = muted.fg or float_border.fg or 0x888888, bg = float_bg, bold = true })
+  vim.api.nvim_set_hl(0, "IpynbOutputBorderQueued", { fg = warn.fg or 0xe5c07b, bg = float_bg, bold = true })
+  vim.api.nvim_set_hl(0, "IpynbOutputBorderRunning", { fg = info_fg, bg = float_bg, bold = true })
+  vim.api.nvim_set_hl(0, "IpynbOutputBorderSuccess", { fg = success.fg or 0x98c379, bg = float_bg, bold = true })
   vim.api.nvim_set_hl(0, "IpynbOutputBorderFail", { fg = err_fg, bg = float_bg, bold = true })
   vim.api.nvim_set_hl(0, "IpynbOutputWin", { link = "NormalFloat" })
   vim.api.nvim_set_hl(0, "IpynbOutputWinNC", { link = "NormalFloat" })
