@@ -145,6 +145,69 @@ pub fn read_json(path: &Path) -> Result<Value> {
         .with_context(|| format!("could not parse notebook {}", path.display()))
 }
 
+fn split_text(value: &mut Value) {
+    let Value::String(source) = value else {
+        return;
+    };
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut chars = source.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if matches!(
+            ch,
+            '\n' | '\r' | '\x0b' | '\x0c' | '\x1c'..='\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        ) {
+            let mut end = index + ch.len_utf8();
+            if ch == '\r' && chars.peek().is_some_and(|(_, ch)| *ch == '\n') {
+                end = chars.next().unwrap().0 + 1;
+            }
+            lines.push(json!(&source[start..end]));
+            start = end;
+        }
+    }
+    if start < source.len() {
+        lines.push(json!(&source[start..]));
+    }
+    *value = Value::Array(lines);
+}
+fn split_mime(data: &mut Value) {
+    if let Some(data) = data.as_object_mut() {
+        for (kind, value) in data {
+            if kind.starts_with("text/")
+                || matches!(kind.as_str(), "image/svg+xml" | "application/javascript")
+            {
+                split_text(value);
+            }
+        }
+    }
+}
+pub fn split_output(output: &mut Value) {
+    match output["output_type"].as_str() {
+        Some("stream") => split_text(&mut output["text"]),
+        Some("execute_result" | "display_data") => split_mime(&mut output["data"]),
+        _ => {}
+    }
+}
+
+// Match nbformat's line-oriented disk representation without a Python round trip.
+pub fn split_lines(notebook: &mut Value) {
+    if let Some(cells) = notebook["cells"].as_array_mut() {
+        for cell in cells {
+            split_text(&mut cell["source"]);
+            if let Some(attachments) = cell.get_mut("attachments").and_then(Value::as_object_mut) {
+                for data in attachments.values_mut() {
+                    split_mime(data);
+                }
+            }
+            if let Some(outputs) = cell.get_mut("outputs").and_then(Value::as_array_mut) {
+                for output in outputs {
+                    split_output(output);
+                }
+            }
+        }
+    }
+}
+
 pub fn write_atomic(path: &Path, notebook: &Value, expected: Option<&Value>) -> Result<Value> {
     let target = write_target(path)?;
     let expected = expected_mtime(expected)?;
@@ -329,7 +392,21 @@ mod tests {
     fn atomic_roundtrip_conflict_and_failure_preserve_files() -> Result<()> {
         let directory = tempdir()?;
         let path = directory.path().join("notebook.ipynb");
-        let original = json!({"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5});
+        let mut original = json!({"cells": [{"source":"α\r\nβ\u{2028}last", "cell_type":"code",
+            "outputs":[{"output_type":"stream","name":"stdout","text":"1\n2\n"}]}],
+            "metadata": {}, "nbformat": 4, "nbformat_minor": 5});
+        split_lines(&mut original);
+        assert_eq!(
+            original["cells"][0]["source"],
+            json!(["α\r\n", "β\u{2028}", "last"])
+        );
+        assert_eq!(
+            original["cells"][0]["outputs"][0]["text"],
+            json!(["1\n", "2\n"])
+        );
+        let once = original.clone();
+        split_lines(&mut original);
+        assert_eq!(original, once);
         let result = write_atomic(&path, &original, None)?;
         assert_eq!(read_json(&path)?, original);
 
