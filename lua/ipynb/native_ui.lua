@@ -241,6 +241,13 @@ local function find_cell(id, preferred_buf)
     local current = M.current(preferred_buf)
     return current and state.by_id[tostring(current.id)] or nil
   end
+  if id == nil then
+    for _, candidate in pairs(buffers) do
+      for _, cell in ipairs(candidate.order) do
+        if cell.ui.float and cell.ui.float.buf == preferred_buf then return cell end
+      end
+    end
+  end
   for _, candidate in pairs(buffers) do
     local cell = id ~= nil and candidate.by_id[tostring(id)] or nil
     if cell then return cell end
