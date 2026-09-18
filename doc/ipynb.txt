@@ -5,8 +5,9 @@ install                                                        *ipynb*
 use lazy.nvim's package spec, including on lazyvim: >lua
   { "WhiteHades/ipynb.nvim", version = "0.1.0", lazy = false, opts = {} }
 <
-:Lazy sync installs lua dependencies and the managed python environment.
-restart after installation or an update to the bundled python runtime.
+:Lazy sync installs Lua dependencies, the managed Python environment, and the
+Rust engine. Rust/Cargo and a C/C++ compiler are required for the build.
+Restart after installation or a backend update.
 :IpynbInstall repairs the managed environment. :checkhealth ipynb checks setup.
 
 configuration                                              *ipynb-options*
@@ -25,7 +26,8 @@ all options are optional. do not set python unless using an existing environment
     output = { preview_lines = 8 },
   }
 <
-python hosts the remote plugin. kernel selects a registered jupyter kernel;
+python supplies Jupytext conversion and kernel discovery. The Rust process
+owns execution state and Jupyter transport. kernel selects a registered kernel;
 otherwise the notebook's kernelspec is used. kernel_python optionally configures
 pyright for notebook buffers. it does not select the execution kernel.
 completion and diagnostics use your existing python language server setup.
@@ -35,39 +37,42 @@ it changes display, not values or dtypes. external kernels keep their own setup.
 previously saved outputs retain their original text until those cells run again.
 
 custom runtimes must provide requirements.txt themselves. the build step checks
-them and registers the remote plugin without changing their python packages.
-set build=false to manage registration yourself with :UpdateRemotePlugins.
-an existing g:python3_host_prog is respected. register project kernels with ipykernel.
+them and builds the Rust engine without changing their Python packages.
+With build=false, run :IpynbInstall after updates to rebuild the engine.
+An existing g:python3_host_prog is respected. Register project kernels with ipykernel.
 
 without lazy.nvim, install the dependencies listed in lazy.lua with your package
 manager, put this plugin on runtimepath, call require('ipynb').init(opts) before
 python providers load, then require('ipynb').setup(opts). install the markdown,
-markdown_inline and python treesitter parsers and run :UpdateRemotePlugins.
+markdown_inline and python treesitter parsers and run :IpynbInstall.
 
-the bundled runtime uses Ipynb commands and its own python and lua namespaces.
+the bundled runtime uses Ipynb commands and its own Lua namespace.
 it does not register or replace Molten commands from a separate installation.
 
 saving                                                       *ipynb-saving*
 
-:w converts the editable markdown back to ipynb before exporting cell outputs.
-the default local notebook workflow reuses the python host for conversion, so
-repeated reads and saves avoid launching a new jupytext process. writes replace
-the file atomically and reject changes made on disk since opening or saving.
-after updating an installation with build=false, run :UpdateRemotePlugins and
-restart Neovim to register the notebook read/write functions.
-reopening imports stored outputs without executing cells. kernel memory is not
-stored in the notebook. model checkpoints remain the framework's responsibility.
+:w converts the editable Markdown and writes cell outputs in one atomic update.
+The persistent Jupytext helper preserves notebook metadata, cell ids, and
+attachments. Rust handles JSON output and rejects writes when the file changed
+on disk since opening or saving. Reopening imports outputs without executing
+cells. Kernel memory is not stored; save model checkpoints separately.
 
-optional rust acceleration                                  *ipynb-rust*
+rust backend                                                *ipynb-rust*
 
-install requirements-rust.txt into the configured python host to enable jiter,
-a Rust JSON parser, then restart Neovim. notebook reads use it automatically;
-Jupytext conversion, nbformat validation, and kernel execution retain their
-existing behavior. the standard Python decoder handles unsupported input and
-installations without jiter. set IPYNB_DISABLE_RUST=1 before starting Neovim to
-force the Python decoder. :checkhealth ipynb reports parser availability.
-the benefit is largest for notebooks with large saved outputs. this does not
-replace the Python kernel or remove its startup cost.
+:IpynbInstall builds native/target/release/ipynb-engine with Cargo. The engine
+uses Rust edition 2024. Python notebook cells still run in the selected Jupyter
+kernel; rewriting the coordinator does not accelerate their Python calculations.
+Jupytext/nbformat and optional rich-output renderers remain Python libraries.
+
+The Rust engine starts only when a notebook needs it. Lua registers its commands
+directly, so :UpdateRemotePlugins is not needed for Rust. :checkhealth ipynb shows
+which backend is available. Set backend="python" in setup options to select the
+compatibility backend; it requires :UpdateRemotePlugins after installation.
+An installation without a built Rust engine also uses that compatibility path.
+Set binary="/path/to/ipynb-engine" to use a separately built executable.
+
+The compatibility backend optionally uses requirements-rust.txt (jiter) for JSON
+reads. IPYNB_DISABLE_RUST=1 disables that decoder, not the Rust backend itself.
 
 keys                                                           *ipynb-keys*
 
