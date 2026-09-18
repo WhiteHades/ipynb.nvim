@@ -14,3 +14,7 @@ jobs:
       - run: python -m unittest discover -s tests -v
         env:
           PYTHONPATH: rplugin/python3
+      - run: rustup update stable --no-self-update
+      - run: cargo +stable test --release --locked --manifest-path native/Cargo.toml
+      - run: cargo +stable build --release --locked --manifest-path native/Cargo.toml
+      - run: python tests/native.py
