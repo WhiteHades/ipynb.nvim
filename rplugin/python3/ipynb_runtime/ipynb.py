@@ -9,6 +9,7 @@ from ipynb_runtime.moltenbuffer import IpynbKernel
 from ipynb_runtime.outputbuffer import OutputBuffer
 from ipynb_runtime.outputchunks import ErrorOutputChunk, Output, OutputStatus, to_outputchunk
 from ipynb_runtime.position import DynamicPosition
+from ipynb_runtime.json_decoder import NotebookJSONDecoder
 
 from ipynb_runtime.utils import IpynbException, notify_error, notify_info, notify_warn
 
@@ -70,7 +71,7 @@ def import_outputs(nvim: Nvim, kernel: IpynbKernel, filepath: str):
     buf_line = 0
     buf = nvim.current.buffer
     buffer_contents = buf[:]
-    nb = nbformat.read(filepath, as_version=NOTEBOOK_VERSION)
+    nb = nbformat.read(filepath, as_version=NOTEBOOK_VERSION, cls=NotebookJSONDecoder)
 
     ipynb_outputs: Dict[CodeCell, Output] = {}
 
@@ -237,7 +238,7 @@ def export_outputs(nvim: Nvim, kernel: IpynbKernel, filepath: str, overwrite: bo
         notify_warn(nvim, f"Cannot export to file: {filepath} because it does not exist.")
         return
 
-    nb = nbformat.read(filepath, as_version=NOTEBOOK_VERSION)
+    nb = nbformat.read(filepath, as_version=NOTEBOOK_VERSION, cls=NotebookJSONDecoder)
 
     ipynb_cells = sorted(kernel.outputs.items(), key=lambda x: x[0])
 

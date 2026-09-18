@@ -10,6 +10,7 @@ import jupytext
 from jupytext.combine import combine_inputs_with_outputs
 
 from ipynb_runtime.ipynb import write_notebook_file
+from ipynb_runtime.json_decoder import NotebookJSONDecoder
 
 
 class NotebookIOError(RuntimeError):
@@ -21,7 +22,9 @@ def _without_trailing_newline(text: str) -> str:
 
 
 def _read(path: str) -> Any:
-    return jupytext.reads(Path(path).read_text(encoding="utf-8"), fmt="ipynb")
+    return jupytext.reads(
+        Path(path).read_text(encoding="utf-8"), fmt="ipynb", cls=NotebookJSONDecoder
+    )
 
 
 def _mtime(path: str) -> tuple[int, int] | None:

@@ -58,6 +58,17 @@ restart Neovim to register the notebook read/write functions.
 reopening imports stored outputs without executing cells. kernel memory is not
 stored in the notebook. model checkpoints remain the framework's responsibility.
 
+optional rust acceleration                                  *ipynb-rust*
+
+install requirements-rust.txt into the configured python host to enable jiter,
+a Rust JSON parser, then restart Neovim. notebook reads use it automatically;
+Jupytext conversion, nbformat validation, and kernel execution retain their
+existing behavior. the standard Python decoder handles unsupported input and
+installations without jiter. set IPYNB_DISABLE_RUST=1 before starting Neovim to
+force the Python decoder. :checkhealth ipynb reports parser availability.
+the benefit is largest for notebooks with large saved outputs. this does not
+replace the Python kernel or remove its startup cost.
+
 keys                                                           *ipynb-keys*
 
 :Ipynb         open the notebook action menu
