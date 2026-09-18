@@ -89,6 +89,22 @@ assert(jupytext.open_notebook("old-manifest.ipynb", buffer) == "original-read")
 assert(jupytext.write_notebook("old-manifest.ipynb", {}, buffer) == "original-write")
 assert(original_reads == 2 and original_writes == 2)
 
+-- Remote functions exist only as FuncUndefined handlers until their first call.
+vim.api.nvim_create_autocmd("FuncUndefined", {
+  pattern = "IpynbNotebookRead",
+  once = true,
+  callback = function()
+    vim.cmd([[
+      function! IpynbNotebookRead(path, template) abort
+        return {'text': 'lazy loaded', 'metadata': {'lazy': 1}}
+      endfunction
+    ]])
+  end,
+})
+assert(vim.fn.exists("*IpynbNotebookRead") == 0)
+assert(jupytext.open_notebook("lazy.ipynb", buffer).lazy == 1)
+assert(original_reads == 2)
+
 vim.fn.delete(path)
 print("pass: notebook IO success, failure, and fallback behavior")
 vim.cmd("qa!")

@@ -10,10 +10,14 @@ local function option(jupytext, name)
   return jupytext.get_option(name)
 end
 
+local function registered(name)
+  return vim.fn.exists("*" .. name) == 1 or vim.fn.exists("#FuncUndefined#" .. name) == 1
+end
+
 local function fast_path(jupytext, path)
   return local_notebook(path)
-    and vim.fn.exists("*IpynbNotebookRead") == 1
-    and vim.fn.exists("*IpynbNotebookWrite") == 1
+    and registered("IpynbNotebookRead")
+    and registered("IpynbNotebookWrite")
     and option(jupytext, "format") == "md:markdown"
     and option(jupytext, "autosync") == false
     and option(jupytext, "async_write") == false

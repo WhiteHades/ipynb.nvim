@@ -26,6 +26,7 @@ def launch(path):
     nvim = pynvim.attach('child', argv=['nvim', '--embed', '--headless', '-u',
                                       os.environ.get('IPYNB_TEST_INIT', str(ROOT / 'tests/minimal.lua')), str(path)])
     wait(nvim, lambda: nvim.exec_lua('return vim.b.notebook_kernel_initialized == true'), 'kernel init')
+    assert nvim.funcs.exists('*IpynbNotebookRead') == 1, 'notebook open bypassed the Python host'
     return nvim
 
 
