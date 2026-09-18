@@ -4,7 +4,7 @@ vim.cmd([[
     if get(g:, 'rpc_read_fail', 0)
       throw 'read failed'
     endif
-    return {'text': "loaded\nnotebook", 'metadata': {'from': 'rpc'}}
+    return {'text': "loaded\nnotebook", 'metadata': {'from': 'rpc', 'kernelspec': {'name': 'python3'}}}
   endfunction
 
   function! IpynbNotebookWrite(path, text, expected_mtime) abort
@@ -52,6 +52,7 @@ local buffer = vim.api.nvim_get_current_buf()
 assert(jupytext.open_notebook("local.ipynb", buffer).from == "rpc")
 assert(vim.api.nvim_buf_get_lines(buffer, 0, -1, false)[1] == "loaded")
 assert(vim.bo[buffer].filetype == "markdown")
+assert(vim.b[buffer].ipynb_read_kernel == "python3")
 assert(not vim.bo[buffer].modified)
 assert(vim.g.rpc_read_calls == 1)
 
@@ -79,6 +80,7 @@ vim.g.rpc_write_fail = 0
 
 settings.format = "py:percent"
 assert(jupytext.open_notebook("unsupported.ipynb", buffer) == "original-read")
+assert(vim.b[buffer].ipynb_read_kernel == nil)
 assert(jupytext.write_notebook("unsupported.ipynb", {}, buffer) == "original-write")
 assert(original_reads == 1 and original_writes == 1)
 assert(vim.g.rpc_read_calls == 1 and vim.g.rpc_write_calls == 2)
@@ -103,6 +105,7 @@ vim.api.nvim_create_autocmd("FuncUndefined", {
 })
 assert(vim.fn.exists("*IpynbNotebookRead") == 0)
 assert(jupytext.open_notebook("lazy.ipynb", buffer).lazy == 1)
+assert(vim.b[buffer].ipynb_read_kernel == false)
 assert(original_reads == 2)
 
 vim.fn.delete(path)

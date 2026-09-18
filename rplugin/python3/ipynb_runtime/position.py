@@ -12,6 +12,9 @@ class Position:
         self.lineno = lineno
         self.colno = colno
 
+    def _get_pos(self) -> List[int]:
+        return [self.lineno, self.colno]
+
     def __lt__(self, other: "Position") -> bool:
         return (self.lineno, self.colno) < (other.lineno, other.colno)
 

@@ -240,7 +240,7 @@ def export_outputs(nvim: Nvim, kernel: IpynbKernel, filepath: str, overwrite: bo
 
     nb = nbformat.read(filepath, as_version=NOTEBOOK_VERSION, cls=NotebookJSONDecoder)
 
-    ipynb_cells = sorted(kernel.outputs.items(), key=lambda x: x[0])
+    ipynb_cells = sorted(kernel.outputs.items(), key=lambda x: x[0].begin._get_pos())
 
     if len(ipynb_cells) == 0:
         notify_warn(nvim, "No cell outputs to export")
@@ -248,6 +248,7 @@ def export_outputs(nvim: Nvim, kernel: IpynbKernel, filepath: str, overwrite: bo
 
     nb_cells = list(filter(lambda x: x["cell_type"] == "code", nb["cells"]))
     nb_index = 0
+    changed = False
     lang = kernel.runtime.kernel_manager.kernel_spec.language  # type: ignore
     for mcell in ipynb_cells:
         matched = False
@@ -262,6 +263,10 @@ def export_outputs(nvim: Nvim, kernel: IpynbKernel, filepath: str, overwrite: bo
                     _notebook_output(nbformat, chunk, output.output.execution_count)
                     for chunk in output.output.chunks
                 ]
+                changed |= (
+                    nb_cell["outputs"] != outputs
+                    or nb_cell["execution_count"] != output.output.execution_count
+                )
                 nb_cell["outputs"] = outputs
                 nb_cell["execution_count"] = output.output.execution_count
                 break  # break out of the while loop
@@ -273,6 +278,8 @@ def export_outputs(nvim: Nvim, kernel: IpynbKernel, filepath: str, overwrite: bo
             )
             return
 
+    if overwrite and not changed:
+        return
     if overwrite:
         write_to = filepath
     else:

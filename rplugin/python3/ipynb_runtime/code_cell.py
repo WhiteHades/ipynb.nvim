@@ -57,15 +57,18 @@ class CodeCell:
     def get_text(self, nvim: Nvim) -> str:
         assert self.begin.bufno == self.end.bufno
 
+        begin_lineno, begin_colno = self.begin._get_pos()
+        end_lineno, end_colno = self.end._get_pos()
+
         lines: List[str] = nvim.funcs.nvim_buf_get_lines(
-            self.bufno, self.begin.lineno, self.end.lineno + 1, False
+            self.bufno, begin_lineno, end_lineno + 1, False
         )
 
         if len(lines) == 0:
             return "" # apparently this can happen...
         if len(lines) == 1:
-            return lines[0][self.begin.colno : self.end.colno]
+            return lines[0][begin_colno:end_colno]
         else:
             return "\n".join(
-                [lines[0][self.begin.colno :]] + lines[1:-1] + [lines[-1][: self.end.colno]]
+                [lines[0][begin_colno:]] + lines[1:-1] + [lines[-1][:end_colno]]
             )
