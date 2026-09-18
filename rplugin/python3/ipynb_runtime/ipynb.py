@@ -133,11 +133,12 @@ def import_outputs(nvim: Nvim, kernel: IpynbKernel, filepath: str):
                 kernel.options,
             )
             kernel.outputs[span].output = output
-            kernel.update_interface()
         else:
             failed += 1
 
     loaded = len(ipynb_outputs) - failed
+    if loaded > 0:
+        kernel.update_interface()
 
     if len(ipynb_outputs) == 0:
         notify_warn(nvim, "No cell outputs to import")
