@@ -6,6 +6,7 @@ local highlight_ns = vim.api.nvim_create_namespace("ipynb-native-highlight")
 
 local buffers = {}
 local config_revision = 0
+local saved_fillchars = {}
 
 local defaults = {
   auto_open_output = false,
@@ -46,6 +47,22 @@ end
 
 local function valid_win(win)
   return type(win) == "number" and vim.api.nvim_win_is_valid(win)
+end
+
+local function image_canvas(win, enabled)
+  if not valid_win(win) then
+    if type(win) == "number" then saved_fillchars[win] = nil end
+    return
+  end
+  if enabled then
+    if saved_fillchars[win] == nil then
+      saved_fillchars[win] = vim.api.nvim_get_option_value("fillchars", { scope = "local", win = win })
+    end
+    vim.api.nvim_win_call(win, function() vim.opt_local.fillchars:append({ eob = " " }) end)
+  elseif saved_fillchars[win] ~= nil then
+    pcall(vim.api.nvim_set_option_value, "fillchars", saved_fillchars[win], { scope = "local", win = win })
+    saved_fillchars[win] = nil
+  end
 end
 
 local function number(value, fallback)
@@ -557,6 +574,7 @@ local function show_virtual(cell, force)
   cell.ui.virt_mark = vim.api.nvim_buf_set_extmark(cell.buf, output_ns, anchor.line, 0, mark_options)
   cell.ui.virt_key = key
   for _, record in ipairs(image_records(cell, "virt")) do pcall(record.api.render, record.id) end
+  if #image_records(cell, "virt") > 0 then image_canvas(win, true) end
   if api.refresh then pcall(api.refresh) end
 end
 
@@ -822,6 +840,9 @@ function M.sync(buf, cells)
     return position_before(left_pos, right_pos)
   end)
   state.order = order
+  if #order == 0 then
+    for _, win in ipairs(vim.fn.win_findbuf(buf)) do image_canvas(win, false) end
+  end
   refresh(buf, false)
   return true
 end
@@ -922,6 +943,7 @@ function M.clear(buf)
     pcall(vim.api.nvim_buf_clear_namespace, buf, output_ns, 0, -1)
     pcall(vim.api.nvim_buf_clear_namespace, buf, highlight_ns, 0, -1)
   end
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do image_canvas(win, false) end
   buffers[buf] = nil
   return true
 end
