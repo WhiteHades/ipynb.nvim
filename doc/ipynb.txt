@@ -3,7 +3,7 @@
 install                                                        *ipynb*
 
 use lazy.nvim's package spec, including on lazyvim: >lua
-  { "WhiteHades/ipynb.nvim", version = "0.1.0", lazy = false, opts = {} }
+  { "WhiteHades/ipynb.nvim", lazy = false, opts = {} }
 <
 :Lazy sync installs Lua dependencies, the managed Python environment, and the
 Rust engine. Rust/Cargo and a C/C++ compiler are required for the build.
