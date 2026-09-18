@@ -80,6 +80,12 @@ local float_created, float_cleared = #calls.from_file, #calls.clear
 ui.refresh(buf)
 assert(#calls.from_file == float_created and #calls.clear == float_cleared,
   "unchanged float refresh must preserve the existing image")
+vim.api.nvim_set_current_win(float)
+assert(ui.hide(true))
+assert(vim.api.nvim_get_current_buf() == buf and output_details() == nil,
+  "explicit hide from a focused float must hide its owning cell")
+
+assert(ui.show("cell-1"))
 assert(ui.hide())
 assert(inline_group() == "IpynbOutputBorderQueued", "temporary float close must restore inline output")
 
