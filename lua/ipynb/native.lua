@@ -46,7 +46,7 @@ local function receive(message)
     local request = pending[message.id]
     if request then
       request.result, request.error = message.result, message.error
-      request.comparison, request.language = message.comparison, message.language
+      request.comparison = message.comparison
       request.done = true
     end
   elseif message.event == "cells" then
@@ -155,15 +155,20 @@ function M.request(method, params)
     if not request.comparison then return request.result end
     if attempt == 2 then error("Notebook source comparison did not converge") end
 
-    local language = request.language or vim.b.ipynb_kernel_language or "python"
-    language = ({ python3 = "python", ipython = "python" })[language] or language
     local clean = require("ipynb.molten_remove_comments").remove_comments
     params.normalized = params.normalized or {}
-    for _, source in ipairs(request.comparison) do
-      if type(source) ~= "string" then error("Notebook engine requested an invalid source comparison") end
-      local parsed, normalized = pcall(clean, source .. "\n", language)
-      if not parsed then error("Could not compare notebook source: " .. tostring(normalized)) end
-      params.normalized[source] = normalized
+    for language, sources in pairs(request.comparison) do
+      if type(language) ~= "string" or type(sources) ~= "table" then
+        error("Notebook engine requested an invalid source comparison")
+      end
+      language = ({ python3 = "python", ipython = "python" })[language] or language
+      params.normalized[language] = params.normalized[language] or {}
+      for _, source in ipairs(sources) do
+        if type(source) ~= "string" then error("Notebook engine requested an invalid source comparison") end
+        local parsed, normalized = pcall(clean, source .. "\n", language)
+        if not parsed then error("Could not compare notebook source: " .. tostring(normalized)) end
+        params.normalized[language][source] = normalized
+      end
     end
   end
 end
