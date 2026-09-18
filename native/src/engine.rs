@@ -142,6 +142,14 @@ impl Engine {
         Ok(ids[0].clone())
     }
 
+    fn kernel_specifications(&mut self) -> Result<serde_json::Map<String, Value>> {
+        self.converter
+            .call(&json!({"op":"kernelspecs"}))?
+            .as_object()
+            .cloned()
+            .context("Kernel specifications must be an object")
+    }
+
     fn sync_positions(&mut self, params: &Value) {
         if let Some(positions) = params["positions"].as_array() {
             for pos in positions {
@@ -255,12 +263,8 @@ impl Engine {
                 Ok(self.state())
             }
             "available" => {
-                let specifications = self.converter.call(&json!({"op":"kernelspecs"}))?;
-                let mut names: Vec<&String> = specifications
-                    .as_object()
-                    .context("Kernel specifications must be an object")?
-                    .keys()
-                    .collect();
+                let specifications = self.kernel_specifications()?;
+                let mut names: Vec<&String> = specifications.keys().collect();
                 names.sort_unstable();
                 Ok(json!(names))
             }
@@ -285,7 +289,23 @@ impl Engine {
                         index += 1;
                     }
                     let numpy = self.options["numpy_legacy_repr"].as_bool().unwrap_or(true);
-                    let kernel = Kernel::start(name, Some(&self.python), numpy)?;
+                    let path = Path::new(name);
+                    let spec_path = if name.starts_with("http://")
+                        || name.starts_with("https://")
+                        || path.exists()
+                        || name.ends_with(".json")
+                    {
+                        None
+                    } else {
+                        let specifications = self.kernel_specifications()?;
+                        let resource = specifications
+                            .get(name)
+                            .and_then(Value::as_str)
+                            .with_context(|| format!("No kernelspec named {name}"))?;
+                        Some(PathBuf::from(resource).join("kernel.json"))
+                    };
+                    let kernel =
+                        Kernel::start(name, Some(&self.python), numpy, spec_path.as_deref())?;
                     if let Some(language) = kernel.language() {
                         self.languages.insert(id.clone(), language.to_owned());
                     }
