@@ -50,6 +50,11 @@ it does not register or replace Molten commands from a separate installation.
 saving                                                       *ipynb-saving*
 
 :w converts the editable markdown back to ipynb before exporting cell outputs.
+the default local notebook workflow reuses the python host for conversion, so
+repeated reads and saves avoid launching a new jupytext process. writes replace
+the file atomically and reject changes made on disk since opening or saving.
+after updating an installation with build=false, run :UpdateRemotePlugins and
+restart Neovim to register the notebook read/write functions.
 reopening imports stored outputs without executing cells. kernel memory is not
 stored in the notebook. model checkpoints remain the framework's responsibility.
 

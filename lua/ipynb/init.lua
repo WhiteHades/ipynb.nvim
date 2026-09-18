@@ -397,6 +397,7 @@ function M.setup(opts)
     update = true,
     async_write = false,
   })
+  require("ipynb.notebook_io").setup(require("jupytext"))
   local group = vim.api.nvim_create_augroup("ipynb", { clear = true })
   local function autocmd(events, callback)
     vim.api.nvim_create_autocmd(events, { group = group, pattern = "*.ipynb", callback = callback })

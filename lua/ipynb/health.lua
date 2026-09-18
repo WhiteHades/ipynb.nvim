@@ -103,6 +103,9 @@ local function report_ipynb_commands()
 
   if #missing == 0 then
     vim.health.ok("ipynb commands are available")
+    if vim.fn.exists("*IpynbNotebookRead") == 0 or vim.fn.exists("*IpynbNotebookWrite") == 0 then
+      vim.health.warn("fast notebook I/O is not registered; run :UpdateRemotePlugins and restart Neovim")
+    end
     return true
   end
 
