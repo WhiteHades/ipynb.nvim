@@ -79,6 +79,8 @@ inline images use at most 90% of the content width and 75% of the available
 height, preserving aspect ratio. Markdown's percentage caps do not apply to
 notebook previews; image.nvim's absolute max_width/max_height limits still do.
 output.height and output.width optionally cap the full output window.
+Kitty-compatible terminals receive explicit cell dimensions, so Docker/SSH
+pixel-size estimates cannot leave a small bitmap inside a large output area.
 
 with :set mouse=a, click an image in normal or insert mode to open just that
 image in a centered terminal viewer. :IpynbImagePopup and <localleader>x open the first image in the current
