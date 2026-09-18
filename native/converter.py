@@ -38,7 +38,7 @@ def _plain(value: Any) -> Any:
 def _read(path: str) -> Any:
     # Explicitly selecting ipynb keeps this helper independent of filename
     # extensions and preserves attachments, ids, metadata, and outputs.
-    return jupytext.read(path, fmt="ipynb", as_version=nbformat.NO_CONVERT)
+    return jupytext.read(path, fmt="ipynb", as_version=4)
 
 
 def _read_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -64,10 +64,14 @@ def _convert_request(request: dict[str, Any]) -> Any:
     existing = request.get("existing")
     if existing is not None:
         # Disk notebooks can store source and MIME text as arrays of lines.
-        # Use nbformat's disk-to-memory conversion without another JSON parse.
+        # Keep the v4 hot path parse-free; older versions need nbformat's
+        # version-aware reader to upgrade their worksheet layout.
         from nbformat.v4.nbjson import JSONReader
 
-        output_notebook = JSONReader().to_notebook(existing)
+        if existing.get("nbformat") == 4:
+            output_notebook = JSONReader().to_notebook(existing)
+        else:
+            output_notebook = nbformat.reads(json.dumps(existing), as_version=4)
         source = combine_inputs_with_outputs(source, output_notebook, fmt="md:markdown")
     return _plain(source)
 
