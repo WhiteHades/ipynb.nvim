@@ -150,17 +150,18 @@ api.image_size = function(id)
     return { width = 0, height = 0 }
   end
   if not img.ipynb_viewer then
-    -- Inline plots share the window with code. Enlarge small source images,
-    -- but keep space around them; explicit provider caps still take precedence.
     if img.render_offset_top > 0 then
-      width = math.max(1, math.floor(width * 0.8))
-      height = math.max(1, math.floor(height * 0.6))
-    end
-    if positive(opts.max_width_window_percentage) then
-      width = math.min(width, math.max(1, math.floor(bounds.width * opts.max_width_window_percentage / 100)))
-    end
-    if positive(opts.max_height_window_percentage) then
-      height = math.min(height, math.max(1, math.floor(bounds.height * opts.max_height_window_percentage / 100)))
+      -- Notebook previews own their bounds; Markdown's percentage caps should
+      -- not shrink plots a second time. Leave room for code around the image.
+      width = math.max(1, math.floor(width * 0.9))
+      height = math.max(1, math.floor(height * 0.75))
+    else
+      if positive(opts.max_width_window_percentage) then
+        width = math.min(width, math.max(1, math.floor(bounds.width * opts.max_width_window_percentage / 100)))
+      end
+      if positive(opts.max_height_window_percentage) then
+        height = math.min(height, math.max(1, math.floor(bounds.height * opts.max_height_window_percentage / 100)))
+      end
     end
     if positive(opts.max_width) then width = math.min(width, opts.max_width) end
     if positive(opts.max_height) then height = math.min(height, opts.max_height) end
