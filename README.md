@@ -7,8 +7,8 @@ outputs. works with lazyvim, lazy.nvim, or neovim's built-in package loader.
 
 ## install
 
-you need neovim 0.12+, python 3.10+, git, curl, tar, a c compiler and
-tree-sitter-cli 0.26.1+. inline plots need imagemagick and a kitty-compatible
+you need neovim 0.12+, python 3.10+, Rust/Cargo, git, curl, tar, a C/C++ compiler
+and tree-sitter-cli 0.26.1+. inline plots need imagemagick and a kitty-compatible
 terminal such as kitty or ghostty. `uv` is optional and speeds up python setup.
 
 ### lazyvim or lazy.nvim
@@ -80,9 +80,14 @@ changing the value or dtype. set `numpy_legacy_repr = false` to keep modern
 numpy formatting. older saved outputs change when their cells run again.
 
 use `:checkhealth ipynb` for setup problems, `:IpynbInstall` to repair the managed
-python environment, and `:help ipynb` for custom environments. the notebook
+Python environment and rebuild the Rust engine, and `:help ipynb` for custom environments. the notebook
 runtime is local; hosted compute, collaboration and browser widgets are outside
 this release.
+
+The Rust engine manages notebook state, execution, and file writes. Notebook
+cells still use their selected Python/Jupyter kernel. Jupytext conversion runs
+in a persistent helper to preserve notebook metadata and formatting. See
+`:help ipynb-rust` for builds and the Python compatibility backend.
 
 ## credits
 
