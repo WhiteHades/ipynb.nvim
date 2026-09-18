@@ -9,7 +9,7 @@ use crate::kernel::Kernel;
 use crate::notebook::{self, Converter};
 
 #[derive(Debug)]
-pub struct SourceComparison(pub Vec<String>, pub String);
+pub struct SourceComparison(pub BTreeMap<String, Vec<String>>);
 impl std::fmt::Display for SourceComparison {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("Source comparison is required")
@@ -65,6 +65,33 @@ fn point(value: &Value) -> [usize; 2] {
         value[0].as_u64().unwrap_or(0) as usize,
         value[1].as_u64().unwrap_or(0) as usize,
     ]
+}
+
+fn comparison_sources(
+    cells: &[&Cell],
+    notebook_cells: &[Value],
+    languages: &HashMap<String, String>,
+) -> SourceComparison {
+    let mut comparison = BTreeMap::<String, Vec<String>>::new();
+    let notebook_sources: Vec<String> = notebook_cells
+        .iter()
+        .filter(|cell| cell["cell_type"] == "code")
+        .map(|cell| text(&cell["source"]))
+        .collect();
+    for cell in cells {
+        let language = languages
+            .get(&cell.kernel)
+            .cloned()
+            .unwrap_or_else(|| "python".into());
+        comparison.entry(language).or_default();
+    }
+    for sources in comparison.values_mut() {
+        sources.extend(notebook_sources.iter().cloned());
+        sources.extend(cells.iter().map(|cell| cell.source.clone()));
+        sources.sort_unstable();
+        sources.dedup();
+    }
+    SourceComparison(comparison)
 }
 
 impl Engine {
@@ -410,6 +437,7 @@ impl Engine {
         let nb_cells = notebook["cells"]
             .as_array_mut()
             .context("Notebook cells must be an array")?;
+        let comparison = comparison_sources(&cells, nb_cells, &self.languages);
         let mut index = 0;
         let mut changed = false;
         for cell in cells {
@@ -422,32 +450,22 @@ impl Engine {
                 }
                 let source = text(&nb["source"]);
                 if source != cell.source {
-                    match (normalized.get(&source), normalized.get(&cell.source)) {
+                    let language = self
+                        .languages
+                        .get(&cell.kernel)
+                        .map(String::as_str)
+                        .unwrap_or("python");
+                    match (
+                        normalized
+                            .get(language)
+                            .and_then(|items| items.get(&source)),
+                        normalized
+                            .get(language)
+                            .and_then(|items| items.get(&cell.source)),
+                    ) {
                         (Some(left), Some(right)) if left == right => {}
                         (Some(_), Some(_)) => continue,
-                        _ => {
-                            let mut sources: Vec<String> = nb_cells
-                                .iter()
-                                .filter(|nb| nb["cell_type"] == "code")
-                                .map(|nb| text(&nb["source"]))
-                                .chain(
-                                    self.cells
-                                        .iter()
-                                        .filter(|c| c.buf == buf)
-                                        .map(|c| c.source.clone()),
-                                )
-                                .collect();
-                            sources.sort_unstable();
-                            sources.dedup();
-                            return Err(SourceComparison(
-                                sources,
-                                self.languages
-                                    .get(&cell.kernel)
-                                    .cloned()
-                                    .unwrap_or_else(|| "python".into()),
-                            )
-                            .into());
-                        }
+                        _ => return Err(comparison.into()),
                     }
                 }
                 let mut outputs = cell.outputs.clone();
@@ -1102,10 +1120,56 @@ fn render_control_chars(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cell(kernel: &str, source: &str) -> Cell {
+        Cell {
+            id: 1,
+            buf: 1,
+            kernel: kernel.into(),
+            begin: [0, 0],
+            end: [0, source.len()],
+            source: source.into(),
+            outputs: vec![],
+            count: Value::Null,
+            status: "done",
+            success: true,
+            old: false,
+            clear_next: false,
+            started: None,
+            elapsed: 0.0,
+        }
+    }
+
     #[test]
     fn progress_and_unicode_render_like_terminal_text() {
         assert_eq!(render_control_chars("abc\rXY"), "XYc");
         assert_eq!(render_control_chars("abc\x08\x08XY"), "aXY");
         assert_eq!(render_control_chars("λβγ\r🙂"), "🙂βγ");
+    }
+
+    #[test]
+    fn source_comparison_groups_every_source_by_kernel_language() {
+        let python = cell("python3", "print(1) # current");
+        let r = cell("ir", "x <- 1 # current");
+        let cells = vec![&python, &r];
+        let notebook = vec![
+            json!({"cell_type":"code", "source":"print(1) # saved"}),
+            json!({"cell_type":"markdown", "source":"ignored"}),
+            json!({"cell_type":"code", "source":"x <- 1 # saved"}),
+        ];
+        let languages = HashMap::from([
+            ("python3".into(), "python".into()),
+            ("ir".into(), "r".into()),
+        ]);
+
+        let comparison = comparison_sources(&cells, &notebook, &languages).0;
+        assert_eq!(comparison.keys().cloned().collect::<Vec<_>>(), ["python", "r"]);
+        for sources in comparison.values() {
+            assert_eq!(sources.len(), 4);
+            assert!(sources.contains(&python.source));
+            assert!(sources.contains(&r.source));
+            assert!(sources.contains(&"print(1) # saved".into()));
+            assert!(sources.contains(&"x <- 1 # saved".into()));
+        }
     }
 }
