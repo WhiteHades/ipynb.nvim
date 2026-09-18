@@ -83,6 +83,12 @@ assert(jupytext.write_notebook("unsupported.ipynb", {}, buffer) == "original-wri
 assert(original_reads == 1 and original_writes == 1)
 assert(vim.g.rpc_read_calls == 1 and vim.g.rpc_write_calls == 2)
 
+settings.format = "md:markdown"
+vim.cmd("delfunction IpynbNotebookRead")
+assert(jupytext.open_notebook("old-manifest.ipynb", buffer) == "original-read")
+assert(jupytext.write_notebook("old-manifest.ipynb", {}, buffer) == "original-write")
+assert(original_reads == 2 and original_writes == 2)
+
 vim.fn.delete(path)
 print("pass: notebook IO success, failure, and fallback behavior")
 vim.cmd("qa!")
