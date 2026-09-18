@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use base64::Engine as _;
@@ -43,8 +43,13 @@ pub struct Kernel {
 impl Kernel {
     /// Start a local kernelspec, attach to a connection file, or create a
     /// kernel through a Jupyter Server URL.
-    pub fn start(name: &str, python: Option<&str>, numpy_legacy_repr: bool) -> Result<Self> {
-        let prepared = prepare_kernel(name, python, numpy_legacy_repr)?;
+    pub fn start(
+        name: &str,
+        python: Option<&str>,
+        numpy_legacy_repr: bool,
+        spec_path: Option<&Path>,
+    ) -> Result<Self> {
+        let prepared = prepare_kernel(name, python, numpy_legacy_repr, spec_path)?;
         let restartable = prepared.restartable();
         let language = prepared.language();
         let (command_tx, command_rx) = mpsc::channel();
@@ -246,6 +251,7 @@ fn prepare_kernel(
     name: &str,
     python: Option<&str>,
     numpy_legacy_repr: bool,
+    spec_path: Option<&Path>,
 ) -> Result<PreparedKernel> {
     if name.starts_with("http://") || name.starts_with("https://") {
         return prepare_external(name);
@@ -259,15 +265,17 @@ fn prepare_kernel(
         });
     }
 
-    prepare_local(name, python, numpy_legacy_repr).map(PreparedKernel::Local)
+    let spec_path = spec_path
+        .ok_or_else(|| anyhow!("local kernel {name} requires an authoritative kernelspec path"))?;
+    prepare_local(name, python, numpy_legacy_repr, spec_path).map(PreparedKernel::Local)
 }
 
 fn prepare_local(
     name: &str,
     python: Option<&str>,
     numpy_legacy_repr: bool,
+    spec_path: &Path,
 ) -> Result<LocalPrepared> {
-    let spec_path = find_kernel_spec(name, python)?;
     let spec = read_kernel_spec(&spec_path, name)
         .with_context(|| format!("read kernelspec {}", spec_path.display()))?;
     let connection_file = unique_connection_file()?;
@@ -283,87 +291,6 @@ fn prepare_local(
         child,
         connection,
     })
-}
-
-/// List kernelspec keys using the selected Python environment.
-pub fn available_kernels(python: Option<&str>) -> Result<Vec<String>> {
-    let executable = python.unwrap_or("python3");
-    let output = Command::new(executable)
-        .args(["-m", "jupyter", "kernelspec", "list", "--json"])
-        .output()
-        .with_context(|| format!("discover kernelspecs with {executable}"))?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "jupyter kernelspec discovery failed with {}",
-            output.status
-        ));
-    }
-    let value: Value =
-        serde_json::from_slice(&output.stdout).context("decode jupyter kernelspec list output")?;
-    let mut names = value
-        .get("kernelspecs")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("jupyter kernelspec list has no kernelspecs object"))?
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    names.sort();
-    Ok(names)
-}
-
-fn find_kernel_spec(name: &str, python: Option<&str>) -> Result<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(value) = std::env::var("JUPYTER_PATH") {
-        roots.extend(std::env::split_paths(&value));
-    }
-    if let Ok(value) = std::env::var("JUPYTER_DATA_DIR") {
-        roots.push(PathBuf::from(value));
-    }
-    if let Ok(value) = std::env::var("XDG_DATA_HOME") {
-        roots.push(PathBuf::from(value).join("jupyter"));
-    }
-    if let Some(home) = home_dir() {
-        roots.push(home.join(".local/share/jupyter"));
-        roots.push(home.join(".jupyter"));
-    }
-    if let Some(python) = python {
-        if let Some(prefix) = Path::new(python).parent().and_then(Path::parent) {
-            roots.push(prefix.join("share/jupyter"));
-        }
-    }
-    roots.push(PathBuf::from("/usr/local/share/jupyter"));
-    roots.push(PathBuf::from("/usr/share/jupyter"));
-
-    for root in roots {
-        let candidate = root.join("kernels").join(name).join("kernel.json");
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    let executable = python.unwrap_or("python3");
-    let output = Command::new(executable)
-        .args(["-m", "jupyter", "kernelspec", "list", "--json"])
-        .output()
-        .with_context(|| format!("discover kernelspecs with {executable}"))?;
-    if output.status.success() {
-        let value: Value = serde_json::from_slice(&output.stdout)
-            .context("decode jupyter kernelspec list output")?;
-        if let Some(path) = value
-            .get("kernelspecs")
-            .and_then(Value::as_object)
-            .and_then(|specs| specs.get(name))
-            .and_then(|spec| spec.get("resource_dir"))
-            .and_then(Value::as_str)
-        {
-            let candidate = Path::new(path).join("kernel.json");
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    Err(anyhow!("Jupyter kernelspec not found: {name}"))
 }
 
 fn read_kernel_spec(path: &Path, fallback_name: &str) -> Result<KernelSpec> {
@@ -634,10 +561,6 @@ fn set_private_file(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
 struct ZmqTransport {
     _context: zmq::Context,
     shell: zmq::Socket,
@@ -695,7 +618,7 @@ impl ZmqTransport {
         })
     }
 
-    fn send_kernel_info(&self, session: &str) -> Result<()> {
+    fn send_kernel_info(&self, session: &str) -> Result<String> {
         send_request(
             &self.shell,
             &self.connection,
@@ -703,8 +626,7 @@ impl ZmqTransport {
             "kernel_info_request",
             json!({}),
             &json!({}),
-        )?;
-        Ok(())
+        )
     }
 
     fn execute(&self, session: &str, msg_id: &str, code: &str) -> Result<()> {
@@ -938,19 +860,28 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 struct SessionState {
     session_id: String,
     ready: bool,
-    saw_kernel_info: bool,
-    saw_idle: bool,
+    probe_id: Option<String>,
+    probe_deadline: Option<Instant>,
+    shell_ready: bool,
+    iopub_ready: bool,
+    iopub_last: Option<Instant>,
     pending: VecDeque<(String, String)>,
     input_parent: Value,
 }
 
 impl SessionState {
+    const KERNEL_INFO_TIMEOUT: Duration = Duration::from_secs(1);
+    const IOPUB_DRAIN: Duration = Duration::from_millis(200);
+
     fn new() -> Self {
         Self {
             session_id: Uuid::new_v4().to_string(),
             ready: false,
-            saw_kernel_info: false,
-            saw_idle: false,
+            probe_id: None,
+            probe_deadline: None,
+            shell_ready: false,
+            iopub_ready: false,
+            iopub_last: None,
             pending: VecDeque::new(),
             input_parent: json!({}),
         }
@@ -958,35 +889,82 @@ impl SessionState {
 
     fn reset(&mut self) {
         self.ready = false;
-        self.saw_kernel_info = false;
-        self.saw_idle = false;
+        self.probe_id = None;
+        self.probe_deadline = None;
+        self.shell_ready = false;
+        self.iopub_ready = false;
+        self.iopub_last = None;
         self.pending.clear();
         self.input_parent = json!({});
     }
 
-    fn observe(&mut self, message: &Value) -> bool {
+    fn probe_sent(&mut self, msg_id: String, now: Instant) {
+        self.ready = false;
+        self.probe_id = Some(msg_id);
+        self.probe_deadline = Some(now + Self::KERNEL_INFO_TIMEOUT);
+        self.shell_ready = false;
+        self.iopub_ready = false;
+        self.iopub_last = None;
+    }
+
+    fn probe_due(&self, now: Instant) -> bool {
+        !self.ready
+            && !(self.shell_ready && self.iopub_ready)
+            && self.probe_deadline.is_some_and(|deadline| now >= deadline)
+    }
+
+    fn observe(&mut self, message: &Value, channel: &str, now: Instant) {
         let msg_type = message
             .get("header")
             .and_then(|header| header.get("msg_type"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if msg_type == "kernel_info_reply" {
-            self.saw_kernel_info = true;
+        let parent_msg_id = message
+            .get("parent_header")
+            .and_then(|parent| parent.get("msg_id"))
+            .and_then(Value::as_str);
+        let matches_probe = self.probe_id.as_deref() == parent_msg_id;
+
+        if channel == "shell" && msg_type == "kernel_info_reply" && matches_probe {
+            self.shell_ready = true;
+            if self.iopub_ready {
+                self.iopub_last = Some(now);
+                self.probe_deadline = None;
+            } else {
+                self.probe_deadline = Some(now + Self::IOPUB_DRAIN);
+            }
         }
-        if msg_type == "status"
-            && message
-                .get("content")
-                .and_then(|content| content.get("execution_state"))
-                .and_then(Value::as_str)
-                == Some("idle")
-        {
-            self.saw_idle = true;
+        if channel == "iopub" {
+            if matches_probe {
+                self.iopub_ready = true;
+                if self.shell_ready {
+                    self.iopub_last = Some(now);
+                    self.probe_deadline = None;
+                }
+            } else if self.shell_ready && self.iopub_ready {
+                self.iopub_last = Some(now);
+            }
         }
         if msg_type == "input_request" {
             self.input_parent = message.get("header").cloned().unwrap_or_else(|| json!({}));
         }
-        if !self.ready && self.saw_kernel_info && self.saw_idle {
+
+        // A kernel_info reply must be followed by a quiet IOPub window before
+        // queued execution can be released.  This mirrors Jupyter client's
+        // wait_for_ready handshake and avoids racing the SUB socket.
+    }
+
+    fn maybe_ready(&mut self, now: Instant) -> bool {
+        if !self.ready
+            && self.shell_ready
+            && self.iopub_ready
+            && self
+                .iopub_last
+                .is_some_and(|last| now.duration_since(last) >= Self::IOPUB_DRAIN)
+        {
             self.ready = true;
+            self.probe_id = None;
+            self.probe_deadline = None;
             return true;
         }
         false
@@ -1044,7 +1022,7 @@ impl ZmqWorker {
         self.transport.interrupt(session)
     }
 
-    fn restart(&mut self, session: &str) -> Result<()> {
+    fn restart(&mut self, session: &str) -> Result<String> {
         let config = self
             .local_config
             .as_ref()
@@ -1054,8 +1032,17 @@ impl ZmqWorker {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let (connection, child) = launch_local(config)?;
-        self.transport = ZmqTransport::connect(connection)?;
+        let (connection, mut child) = launch_local(config)?;
+        let transport = match ZmqTransport::connect(connection) {
+            Ok(transport) => transport,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = fs::remove_file(&config.connection_file);
+                return Err(error);
+            }
+        };
+        self.transport = transport;
         self.child = Some(child);
         self.transport.send_kernel_info(session)
     }
@@ -1094,13 +1081,16 @@ fn run_zmq_worker(
     events: Sender<Value>,
 ) {
     let mut session = SessionState::new();
-    if let Err(error) = worker.transport.send_kernel_info(&session.session_id) {
-        emit_error(&events, "shell", error);
-        worker.shutdown(&session.session_id);
-        return;
+    match worker.transport.send_kernel_info(&session.session_id) {
+        Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+        Err(error) => {
+            emit_error(&events, "shell", error);
+            worker.shutdown(&session.session_id);
+            return;
+        }
     }
 
-    let mut last_probe = std::time::Instant::now();
+    let mut last_child_check = Instant::now();
     'worker: loop {
         loop {
             match commands.try_recv() {
@@ -1114,18 +1104,20 @@ fn run_zmq_worker(
             }
         }
 
-        if last_probe.elapsed() >= Duration::from_millis(250) {
-            last_probe = std::time::Instant::now();
+        let now = Instant::now();
+        if now.duration_since(last_child_check) >= Duration::from_millis(250) {
+            last_child_check = now;
             if let Some(child) = &mut worker.child {
                 if let Ok(Some(status)) = child.try_wait() {
                     emit_error(&events, "process", format!("Kernel exited: {status}"));
                     break;
                 }
             }
-            // PUB subscriptions can miss the first idle message while connecting.
-            // Repeat the handshake until both shell and IOPub are responsive.
-            if !session.ready {
-                if let Err(error) = worker.transport.send_kernel_info(&session.session_id) {
+        }
+        if session.probe_due(now) {
+            match worker.transport.send_kernel_info(&session.session_id) {
+                Ok(msg_id) => session.probe_sent(msg_id, now),
+                Err(error) => {
                     emit_error(&events, "shell", error);
                     break;
                 }
@@ -1160,25 +1152,16 @@ fn run_zmq_worker(
             };
             match receive_message(&frames, &worker.transport.connection, channel) {
                 Ok(message) => {
-                    let became_ready = session.observe(&message);
+                    session.observe(&message, channel, Instant::now());
                     if events.send(message).is_err() {
                         break 'worker;
-                    }
-                    if became_ready {
-                        if events.send(ready_message()).is_err() {
-                            break 'worker;
-                        }
-                        while let Some((msg_id, code)) = session.pending.pop_front() {
-                            if let Err(error) = worker.execute(&session.session_id, &msg_id, &code)
-                            {
-                                emit_error(&events, "shell", error);
-                                break;
-                            }
-                        }
                     }
                 }
                 Err(error) => emit_error(&events, channel, error),
             }
+        }
+        if !finish_zmq_readiness(&mut worker, &mut session, &events) {
+            break;
         }
     }
     worker.shutdown(&session.session_id);
@@ -1215,13 +1198,37 @@ fn handle_zmq_command(
         }
         CommandMessage::Restart => {
             session.reset();
-            if let Err(error) = worker.restart(&session.session_id) {
-                emit_error(events, "restart", error);
+            match worker.restart(&session.session_id) {
+                Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+                Err(error) => {
+                    emit_error(events, "restart", error);
+                    return true;
+                }
             }
             false
         }
         CommandMessage::Shutdown => true,
     }
+}
+
+fn finish_zmq_readiness(
+    worker: &mut ZmqWorker,
+    session: &mut SessionState,
+    events: &Sender<Value>,
+) -> bool {
+    if !session.maybe_ready(Instant::now()) {
+        return true;
+    }
+    if events.send(ready_message()).is_err() {
+        return false;
+    }
+    while let Some((msg_id, code)) = session.pending.pop_front() {
+        if let Err(error) = worker.execute(&session.session_id, &msg_id, &code) {
+            emit_error(events, "shell", error);
+            break;
+        }
+    }
+    true
 }
 
 fn ready_message() -> Value {
@@ -1248,7 +1255,7 @@ fn emit_error(events: &Sender<Value>, channel: &str, error: impl std::fmt::Displ
 
 use reqwest::Url;
 use reqwest::blocking::Client;
-use tungstenite::http::Request;
+use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket, connect};
 
@@ -1276,6 +1283,7 @@ fn prepare_external(name: &str) -> Result<PreparedKernel> {
     base_url.set_fragment(None);
 
     let client = Client::builder()
+        .timeout(Duration::from_secs(5))
         .build()
         .context("create Jupyter HTTP client")?;
     let mut request = client.post(join_url(&base_url, "api/kernels"));
@@ -1307,15 +1315,24 @@ fn prepare_external(name: &str) -> Result<PreparedKernel> {
         base_url.path().trim_end_matches('/')
     );
     websocket_url.set_path(&path);
-    let websocket_request = if let Some(token) = &token {
-        Request::builder()
-            .uri(websocket_url.as_str())
-            .header("Authorization", format!("token {token}"))
-            .body(())?
-    } else {
-        Request::builder().uri(websocket_url.as_str()).body(())?
+    let mut websocket_request = websocket_url.as_str().into_client_request()?;
+    if let Some(token) = &token {
+        websocket_request
+            .headers_mut()
+            .insert("Authorization", format!("token {token}").parse()?);
+    }
+    let socket = match connect(websocket_request) {
+        Ok((socket, _)) => socket,
+        Err(error) => {
+            let mut cleanup =
+                client.delete(join_url(&base_url, &format!("api/kernels/{kernel_id}")));
+            if let Some(token) = &token {
+                cleanup = cleanup.header("Authorization", format!("token {token}"));
+            }
+            let _ = cleanup.send();
+            return Err(error).context("connect Jupyter Server websocket");
+        }
     };
-    let (socket, _) = connect(websocket_request).context("connect Jupyter Server websocket")?;
     let socket = set_websocket_timeout(socket);
     Ok(PreparedKernel::External(ExternalPrepared {
         config: ExternalConfig {
@@ -1432,17 +1449,18 @@ impl ExternalWorker {
         }
     }
 
-    fn send_kernel_info(&mut self, session: &str) -> Result<()> {
+    fn send_kernel_info(&mut self, session: &str) -> Result<String> {
+        let msg_id = Uuid::new_v4().to_string();
         let message = request_value(
             session,
-            &Uuid::new_v4().to_string(),
+            &msg_id,
             "kernel_info_request",
             json!({}),
             &json!({}),
         );
         self.socket
             .send(Message::Text(message.to_string().into()))?;
-        Ok(())
+        Ok(msg_id)
     }
 }
 
@@ -1457,9 +1475,13 @@ fn run_external_worker(
         socket: prepared.socket,
     };
     let mut session = SessionState::new();
-    if let Err(error) = worker.send_kernel_info(&session.session_id) {
-        emit_error(&events, "websocket", error);
-        return;
+    match worker.send_kernel_info(&session.session_id) {
+        Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+        Err(error) => {
+            emit_error(&events, "websocket", error);
+            let _ = worker.shutdown();
+            return;
+        }
     }
 
     'worker: loop {
@@ -1475,9 +1497,19 @@ fn run_external_worker(
             }
         }
 
+        if session.probe_due(Instant::now()) {
+            match worker.send_kernel_info(&session.session_id) {
+                Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+                Err(error) => {
+                    emit_error(&events, "websocket", error);
+                    break 'worker;
+                }
+            }
+        }
+
         match worker.socket.read() {
             Ok(Message::Text(text)) => {
-                if !handle_external_message(text.as_ref(), &mut worker, &mut session, &events) {
+                if !handle_external_message(text.as_ref(), &mut session, &events, Instant::now()) {
                     break 'worker;
                 }
             }
@@ -1489,7 +1521,7 @@ fn run_external_worker(
                         continue;
                     }
                 };
-                if !handle_external_message(text, &mut worker, &mut session, &events) {
+                if !handle_external_message(text, &mut session, &events, Instant::now()) {
                     break 'worker;
                 }
             }
@@ -1506,6 +1538,9 @@ fn run_external_worker(
                 emit_error(&events, "websocket", error);
                 break 'worker;
             }
+        }
+        if !finish_external_readiness(&mut worker, &mut session, &events) {
+            break 'worker;
         }
     }
     let _ = worker.shutdown();
@@ -1544,8 +1579,15 @@ fn handle_external_command(
             session.reset();
             if let Err(error) = worker.restart() {
                 emit_error(events, "http", error);
-            } else if let Err(error) = worker.send_kernel_info(&session.session_id) {
-                emit_error(events, "websocket", error);
+                return true;
+            } else {
+                match worker.send_kernel_info(&session.session_id) {
+                    Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+                    Err(error) => {
+                        emit_error(events, "websocket", error);
+                        return true;
+                    }
+                }
             }
             false
         }
@@ -1555,9 +1597,9 @@ fn handle_external_command(
 
 fn handle_external_message(
     text: &str,
-    worker: &mut ExternalWorker,
     session: &mut SessionState,
     events: &Sender<Value>,
+    now: Instant,
 ) -> bool {
     let mut message: Value = match serde_json::from_str(text) {
         Ok(message) => message,
@@ -1578,19 +1620,32 @@ fn handle_external_message(
             message["msg_type"] = msg_type;
         }
     }
-    let became_ready = session.observe(&message);
+    let channel = message
+        .get("channel")
+        .and_then(Value::as_str)
+        .unwrap_or("iopub");
+    session.observe(&message, channel, now);
     if events.send(message).is_err() {
         return false;
     }
-    if became_ready {
-        if events.send(ready_message()).is_err() {
-            return false;
-        }
-        while let Some((msg_id, code)) = session.pending.pop_front() {
-            if let Err(error) = worker.execute(&session.session_id, &msg_id, &code) {
-                emit_error(events, "websocket", error);
-                break;
-            }
+    true
+}
+
+fn finish_external_readiness(
+    worker: &mut ExternalWorker,
+    session: &mut SessionState,
+    events: &Sender<Value>,
+) -> bool {
+    if !session.maybe_ready(Instant::now()) {
+        return true;
+    }
+    if events.send(ready_message()).is_err() {
+        return false;
+    }
+    while let Some((msg_id, code)) = session.pending.pop_front() {
+        if let Err(error) = worker.execute(&session.session_id, &msg_id, &code) {
+            emit_error(events, "websocket", error);
+            break;
         }
     }
     true
@@ -1604,6 +1659,7 @@ fn request_value(
     parent_header: &Value,
 ) -> Value {
     json!({
+        "channel": if msg_type == "input_reply" { "stdin" } else { "shell" },
         "header": request_header(session, msg_id, msg_type),
         "parent_header": parent_header,
         "metadata": {},
@@ -1760,6 +1816,8 @@ mod tests {
     #[test]
     fn pending_execution_is_fifo_and_only_flushes_after_ready() {
         let mut session = SessionState::new();
+        let started = Instant::now();
+        session.probe_sent("probe".to_string(), started);
         session
             .pending
             .push_back(("one".to_string(), "1".to_string()));
@@ -1769,19 +1827,22 @@ mod tests {
         let info = message_value(
             "shell",
             json!({"msg_type":"kernel_info_reply"}),
-            json!({}),
+            json!({"msg_id":"probe"}),
             json!({}),
             json!({}),
         );
         let idle = message_value(
             "iopub",
             json!({"msg_type":"status"}),
-            json!({}),
+            json!({"msg_id":"probe"}),
             json!({}),
             json!({"execution_state":"idle"}),
         );
-        assert!(!session.observe(&info));
-        assert!(session.observe(&idle));
+        session.observe(&info, "shell", started);
+        assert!(!session.maybe_ready(started + Duration::from_millis(200)));
+        session.observe(&idle, "iopub", started + Duration::from_millis(1));
+        assert!(!session.maybe_ready(started + Duration::from_millis(199)));
+        assert!(session.maybe_ready(started + Duration::from_millis(201)));
         assert!(session.ready);
         assert_eq!(session.pending.pop_front().unwrap().0, "one");
         assert_eq!(session.pending.pop_front().unwrap().0, "two");
@@ -1931,7 +1992,7 @@ mod tests {
             }
         });
 
-        let kernel = Kernel::start(path.to_str().unwrap(), None, false).unwrap();
+        let kernel = Kernel::start(path.to_str().unwrap(), None, false, None).unwrap();
         let request = kernel.execute("2 + 2").unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut messages = Vec::new();
