@@ -68,6 +68,7 @@ api.from_file = function(path, opts)
     if not loaded or not result then return nil end
     img = result
     images[id] = img
+    require("ipynb.image_kitty").track(img, term)
     local render = img.render
     -- Guard provider-triggered redraws and asynchronous conversion callbacks too.
     img.render = function(self, geometry)
