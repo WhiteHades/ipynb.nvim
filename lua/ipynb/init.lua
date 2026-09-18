@@ -109,7 +109,10 @@ local function default_kernel_name()
   local kernels = available_kernels()
   local requested = M.options.kernel
   local path = vim.api.nvim_buf_get_name(0)
-  if not requested and vim.fn.filereadable(path) == 1 then
+  local read_kernel = vim.b.ipynb_read_kernel
+  if not requested and read_kernel ~= nil then
+    requested = read_kernel or nil
+  elseif not requested and vim.fn.filereadable(path) == 1 then
     local ok, notebook = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
     if ok then requested = ((notebook.metadata or {}).kernelspec or {}).name end
   end
@@ -406,7 +409,6 @@ function M.setup(opts)
   autocmd({ "BufReadPost", "BufEnter" }, function(ev) activate_notebook_buffer(ev.buf) end)
   autocmd({ "BufWinEnter", "BufWritePost", "InsertLeave", "TextChanged" }, function(ev)
     require("ipynb.markdown").enable(ev.buf)
-    require("ipynb.markdown").refresh(ev.buf)
     vim.wo.spell = false
   end)
   autocmd("InsertEnter", function(ev) require("ipynb.markdown").disable(ev.buf) end)

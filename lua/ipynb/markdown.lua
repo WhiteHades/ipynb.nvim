@@ -58,6 +58,9 @@ local function setup_highlights()
   end
 end
 
+local highlight_group = vim.api.nvim_create_augroup("ipynb-markdown-highlights", { clear = true })
+vim.api.nvim_create_autocmd("ColorScheme", { group = highlight_group, callback = setup_highlights })
+
 local function setup_syntax(bufnr)
   vim.api.nvim_buf_call(bufnr, function()
     for _, group in ipairs(syntax_groups) do
@@ -110,6 +113,11 @@ end
 
 local function render(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  local changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
+  if vim.b[bufnr].ipynb_markdown_render_tick == changedtick then
     return
   end
 
@@ -170,6 +178,7 @@ local function render(bufnr)
       })
     end
   end
+  vim.b[bufnr].ipynb_markdown_render_tick = changedtick
 end
 
 function M.enable(bufnr)
@@ -180,8 +189,10 @@ function M.enable(bufnr)
   vim.wo.conceallevel = 3
   vim.wo.concealcursor = "nc"
 
-  setup_highlights()
-  setup_syntax(bufnr)
+  if vim.b[bufnr].ipynb_markdown_enabled ~= true then
+    setup_highlights()
+    setup_syntax(bufnr)
+  end
   vim.b[bufnr].ipynb_markdown_enabled = true
   render(bufnr)
 end
@@ -205,6 +216,7 @@ function M.disable(bufnr)
 
   clear(bufnr)
   vim.b[bufnr].ipynb_markdown_enabled = false
+  vim.b[bufnr].ipynb_markdown_render_tick = nil
   vim.wo.conceallevel = 0
   vim.wo.concealcursor = ""
   vim.api.nvim_buf_call(bufnr, function()

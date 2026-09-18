@@ -49,6 +49,8 @@ local function open_notebook(jupytext, path, bufnr)
   local text = result.text or ""
   local lines = vim.split(text, "\n", { plain = true })
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  -- Kernel selection follows BufReadPost; reuse metadata already decoded here.
+  vim.b[bufnr].ipynb_read_kernel = ((result.metadata or {}).kernelspec or {}).name or false
   set_filetype(jupytext, path, result.metadata or {}, bufnr)
   vim.api.nvim_set_option_value("modified", false, { buf = bufnr })
   return result.metadata
@@ -78,6 +80,7 @@ function M.setup(jupytext)
     if fast_path(jupytext, path) then
       return open_notebook(jupytext, path, bufnr or 0)
     end
+    vim.b[bufnr or 0].ipynb_read_kernel = nil
     return original_open(path, bufnr)
   end
   jupytext.write_notebook = function(path, metadata, bufnr)
