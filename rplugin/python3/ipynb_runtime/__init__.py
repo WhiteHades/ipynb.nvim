@@ -62,6 +62,18 @@ class Ipynb:
         self.input_timer = None
         self.ipynb_kernels = {}
 
+    @pynvim.function("IpynbNotebookRead", sync=True)
+    def notebook_read(self, args):
+        from ipynb_runtime.notebook_io import read_notebook
+
+        return read_notebook(*args)
+
+    @pynvim.function("IpynbNotebookWrite", sync=True)
+    def notebook_write(self, args):
+        from ipynb_runtime.notebook_io import write_notebook
+
+        return write_notebook(*args)
+
     def _initialize(self) -> None:
         assert not self.initialized
 
