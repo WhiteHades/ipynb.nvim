@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory(dir=ROOT / ".tmp", prefix="native-") as directo
                     return response.get("result")
         try:
             request("configure", {"image_provider": "none", "numpy_legacy_repr": False})
-            kernel = request("init", {"buf": 1, "kernel": "python3"})
+            kernel = request("init", {"buf": 1, "kernel": os.environ.get("IPYNB_TEST_KERNEL", "python3")})
             request("init", {"buf": 2, "kernel": kernel, "shared": True})
             source = 'from IPython.display import display\nprint(input("value: "))\ndisplay({"text/plain": "rich", "application/x-test": {"kept": True}}, raw=True)'
             lines = source.split("\n")
