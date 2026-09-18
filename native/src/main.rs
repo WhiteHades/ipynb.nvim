@@ -73,9 +73,7 @@ fn run() -> Result<()> {
                     Ok(result) => emit(&json!({"id":id,"result":result}))?,
                     Err(error) => {
                         if let Some(comparison) = error.downcast_ref::<engine::SourceComparison>() {
-                            emit(
-                                &json!({"id":id,"comparison":comparison.0,"language":comparison.1}),
-                            )?;
+                            emit(&json!({"id":id,"comparison":comparison.0}))?;
                         } else {
                             emit(&json!({"id":id,"error":format!("{error:#}")}))?;
                         }
