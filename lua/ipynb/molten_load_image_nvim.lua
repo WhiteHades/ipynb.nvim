@@ -4,6 +4,8 @@ local ok, image = pcall(require, "image")
 local images = {}
 local api = {}
 local term
+local INLINE_WIDTH_FACTOR = 0.60
+local INLINE_HEIGHT_FACTOR = 0.50
 
 -- image.nvim derives float bounds from screenpos(win, 1, 1), which becomes
 -- zero when line 1 is scrolled away. Notebook floats have real scrollable rows.
@@ -154,8 +156,8 @@ api.image_size = function(id)
     if img.render_offset_top > 0 then
       -- Notebook previews own their bounds; Markdown's percentage caps should
       -- not shrink plots a second time. Leave room for code around the image.
-      width = math.max(1, math.floor(width * 0.9))
-      height = math.max(1, math.floor(height * 0.75))
+      width = math.max(1, math.floor(width * INLINE_WIDTH_FACTOR))
+      height = math.max(1, math.floor(height * INLINE_HEIGHT_FACTOR))
     else
       if positive(opts.max_width_window_percentage) then
         width = math.min(width, math.max(1, math.floor(bounds.width * opts.max_width_window_percentage / 100)))

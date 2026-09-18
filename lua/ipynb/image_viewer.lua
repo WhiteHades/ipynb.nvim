@@ -4,9 +4,10 @@ local M = {}
 local active
 local next_id = 0
 local autocmd_group
+local POPUP_FRACTION = 0.84
 
 local function limit(value)
-  return math.max(1, math.floor(value * 0.92) - 2)
+  return math.max(1, math.floor(value * POPUP_FRACTION) - 2)
 end
 
 local function config(width, height)
@@ -151,6 +152,7 @@ function M.open(path)
   active = { path = path, id = ("ipynb-image-viewer-%d"):format(next_id), buffer = buffer, window = window }
   vim.keymap.set("n", "q", close, { buffer = buffer, silent = true, nowait = true })
   vim.keymap.set("n", "<Esc>", close, { buffer = buffer, silent = true, nowait = true })
+  vim.keymap.set("n", "<localleader>O", close, { buffer = buffer, silent = true, nowait = true })
   setup_autocmds(active)
   local opened = relayout()
   if not opened then vim.notify("Unable to display image", vim.log.levels.WARN) end
