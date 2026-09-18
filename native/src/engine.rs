@@ -318,6 +318,13 @@ impl Engine {
                     kernel.interrupt()?;
                 } else {
                     kernel.restart()?;
+                    let old_requests: std::collections::HashSet<u64> = self
+                        .cells
+                        .iter()
+                        .filter(|c| c.kernel == id)
+                        .map(|c| c.id)
+                        .collect();
+                    self.requests.retain(|_, cell| !old_requests.contains(cell));
                     for cell in self.cells.iter_mut().filter(|c| c.kernel == id) {
                         cell.status = "done";
                         cell.old = true;
