@@ -662,10 +662,29 @@ impl ZmqTransport {
             ));
         }
         let context = zmq::Context::new();
-        let shell = connect_socket(&context, zmq::DEALER, &connection, connection.shell_port)?;
+        let identity = Uuid::new_v4().to_string();
+        let shell = connect_socket(
+            &context,
+            zmq::DEALER,
+            &connection,
+            connection.shell_port,
+            identity.as_bytes(),
+        )?;
         let iopub = connect_iopub(&context, &connection, connection.iopub_port)?;
-        let stdin = connect_socket(&context, zmq::DEALER, &connection, connection.stdin_port)?;
-        let control = connect_socket(&context, zmq::DEALER, &connection, connection.control_port)?;
+        let stdin = connect_socket(
+            &context,
+            zmq::DEALER,
+            &connection,
+            connection.stdin_port,
+            identity.as_bytes(),
+        )?;
+        let control = connect_socket(
+            &context,
+            zmq::DEALER,
+            &connection,
+            connection.control_port,
+            identity.as_bytes(),
+        )?;
         Ok(Self {
             _context: context,
             shell,
@@ -749,9 +768,11 @@ fn connect_socket(
     socket_type: zmq::SocketType,
     connection: &ConnectionInfo,
     port: u16,
+    identity: &[u8],
 ) -> Result<zmq::Socket> {
     let socket = context.socket(socket_type)?;
     socket.set_linger(0)?;
+    socket.set_identity(identity)?;
     socket.connect(&endpoint(connection, port))?;
     Ok(socket)
 }
