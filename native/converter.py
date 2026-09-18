@@ -17,6 +17,12 @@ from typing import Any
 import jupytext
 import nbformat
 from jupytext.combine import combine_inputs_with_outputs
+from jupyter_client.kernelspec import KernelSpecManager
+
+
+# Keep the manager alive with the converter process.  Discovery still runs for
+# every request so newly installed or removed kernels are visible immediately.
+_KERNEL_SPEC_MANAGER = KernelSpecManager()
 
 
 def _plain(value: Any) -> Any:
@@ -125,6 +131,12 @@ def _render_request(request: dict[str, Any]) -> dict[str, str]:
     raise ValueError(f"no native renderer for MIME type {mime!r}")
 
 
+def _kernelspecs_request() -> dict[str, str]:
+    """Return the current Jupyter kernelspec name-to-resource mapping."""
+
+    return _KERNEL_SPEC_MANAGER.find_kernel_specs()
+
+
 def _dispatch(request: Any) -> Any:
     if not isinstance(request, dict):
         raise TypeError("request must be a JSON object")
@@ -135,6 +147,8 @@ def _dispatch(request: Any) -> Any:
         return _convert_request(request)
     if operation == "render":
         return _render_request(request)
+    if operation == "kernelspecs":
+        return _kernelspecs_request()
     if operation == "shutdown":
         raise EOFError
     raise ValueError(f"unknown converter operation: {operation!r}")
