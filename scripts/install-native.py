@@ -31,10 +31,7 @@ NATIVE_LUA = (
     "assert(python and python~='', 'IPYNB_NATIVE_PYTHON is missing'); "
     "vim.opt.rtp:prepend(root); vim.cmd('packloadall'); "
     "require('ipynb').setup({python=python, images=false}); "
-    "local install=require('nvim-treesitter').install({'markdown','markdown_inline','python'}); "
-    "assert(install and install.wait, 'nvim-treesitter install API is unavailable'); "
-    "install:wait(300000); vim.cmd('runtime! plugin/rplugin.vim'); "
-    "vim.cmd('UpdateRemotePlugins')"
+    "require('ipynb').install()"
 )
 
 
@@ -93,7 +90,7 @@ def clone_dependencies(plugin_root: Path) -> None:
 
 
 def configure_neovim(plugin_root: Path, interpreter: Path, nvim: str = "nvim") -> None:
-    """Load the native package, install parsers, and register remote plugins."""
+    """Load the package and install its parsers and Rust engine."""
 
     environment = os.environ.copy()
     environment.update(
