@@ -894,6 +894,11 @@ function M.open(cell_id)
   return render_float(cell, focus)
 end
 
+function M.show(cell_id)
+  local cell = find_cell(cell_id)
+  return cell and render_float(cell, false) or false
+end
+
 function M.hide()
   local hidden = false
   for _, state in pairs(buffers) do
