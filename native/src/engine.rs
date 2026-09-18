@@ -94,6 +94,16 @@ fn comparison_sources(
     SourceComparison(comparison)
 }
 
+fn imported_status(count: &Value) -> &'static str {
+    if count.as_i64().is_some_and(|value| value != 0)
+        || count.as_u64().is_some_and(|value| value != 0)
+    {
+        "done"
+    } else {
+        "new"
+    }
+}
+
 impl Engine {
     pub fn new(python: String, converter: &Path) -> Result<Self> {
         Ok(Self {
@@ -244,7 +254,16 @@ impl Engine {
                 self.options = params.clone();
                 Ok(self.state())
             }
-            "available" => Ok(json!(crate::kernel::available_kernels(Some(&self.python))?)),
+            "available" => {
+                let specifications = self.converter.call(&json!({"op":"kernelspecs"}))?;
+                let mut names: Vec<&String> = specifications
+                    .as_object()
+                    .context("Kernel specifications must be an object")?
+                    .keys()
+                    .collect();
+                names.sort_unstable();
+                Ok(json!(names))
+            }
             "state" | "tick" => {
                 self.poll()?;
                 Ok(self.state())
@@ -520,8 +539,16 @@ impl Engine {
 
     fn export(&mut self, params: &Value) -> Result<()> {
         let path = Self::path(params)?;
-        let mut notebook = notebook::read_json(path)?;
+        let mut converted = self.converter.read(path, Path::new(""))?;
+        let mut notebook = converted["notebook"].take();
         let kernel = self.selected_kernel(params)?;
+        if !self
+            .cells
+            .iter()
+            .any(|cell| cell.buf == params["buf"].as_u64().unwrap_or(0) && cell.kernel == kernel)
+        {
+            return Ok(());
+        }
         let changed = self.merge_outputs(
             &mut notebook,
             params["buf"].as_u64().unwrap_or(0),
@@ -554,7 +581,10 @@ impl Engine {
             {
                 notebook
             }
-            _ => notebook::read_json(path)?,
+            _ => {
+                let mut converted = self.converter.read(path, Path::new(""))?;
+                converted["notebook"].take()
+            }
         };
         let buf = params["buf"].as_u64().unwrap_or(0);
         let kernel = self.selected_kernel(params)?;
@@ -595,7 +625,7 @@ impl Engine {
             let cell = self.cells.iter_mut().find(|c| c.id == id).unwrap();
             cell.outputs = nb["outputs"].as_array().cloned().unwrap_or_default();
             cell.count = nb["execution_count"].clone();
-            cell.status = "done";
+            cell.status = imported_status(&cell.count);
             cell.old = true;
             cell.success = !cell.outputs.iter().any(|o| o["output_type"] == "error");
         }
@@ -1171,5 +1201,12 @@ mod tests {
             assert!(sources.contains(&"print(1) # saved".into()));
             assert!(sources.contains(&"x <- 1 # saved".into()));
         }
+    }
+
+    #[test]
+    fn imported_cells_without_an_execution_count_are_new() {
+        assert_eq!(imported_status(&Value::Null), "new");
+        assert_eq!(imported_status(&json!(0)), "new");
+        assert_eq!(imported_status(&json!(1)), "done");
     }
 }
