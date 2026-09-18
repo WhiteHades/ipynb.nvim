@@ -59,6 +59,16 @@ fn run() -> Result<()> {
                     break;
                 }
                 let result = backend.dispatch(method, &request["params"]);
+                // Publish mutations before acknowledging the command so the
+                // next editor action sees the new cell positions and outputs.
+                match backend.events() {
+                    Ok(events) => {
+                        for event in events {
+                            emit(&event)?;
+                        }
+                    }
+                    Err(error) => emit(&json!({"event":"error","message":format!("{error:#}")}))?,
+                }
                 match result {
                     Ok(result) => emit(&json!({"id":id,"result":result}))?,
                     Err(error) => {
