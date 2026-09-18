@@ -198,6 +198,7 @@ struct ConnectionInfo {
 #[derive(Clone, Debug)]
 struct KernelSpec {
     argv: Vec<String>,
+    env: Vec<(String, String)>,
     language: String,
     resource_dir: PathBuf,
     name: String,
@@ -384,6 +385,19 @@ fn read_kernel_spec(path: &Path, fallback_name: &str) -> Result<KernelSpec> {
     if argv.is_empty() {
         return Err(anyhow!("kernelspec {} has an empty argv", path.display()));
     }
+    let env = match value.get("env") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Object(values)) => values
+            .iter()
+            .map(|(key, value)| {
+                value
+                    .as_str()
+                    .map(|value| (key.clone(), value.to_string()))
+                    .ok_or_else(|| anyhow!("kernelspec env value for {key} is not a string"))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        Some(_) => return Err(anyhow!("kernelspec env is not an object")),
+    };
     let language = value
         .get("language")
         .and_then(Value::as_str)
@@ -393,6 +407,7 @@ fn read_kernel_spec(path: &Path, fallback_name: &str) -> Result<KernelSpec> {
     let resource_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     Ok(KernelSpec {
         argv,
+        env,
         language,
         resource_dir,
         name,
@@ -428,24 +443,10 @@ fn launch_local(config: &LocalConfig) -> Result<(ConnectionInfo, Child)> {
         })
         .collect::<Vec<_>>();
 
-    if config
-        .spec
-        .language
-        .to_ascii_lowercase()
-        .starts_with("python")
+    if let Some(python) = &config.python
+        && matches!(argv.first().map(String::as_str), Some("python" | "python3"))
     {
-        if let Some(python) = &config.python {
-            argv[0] = python.clone();
-        }
-    }
-    if !argv
-        .iter()
-        .any(|argument| argument == &config.connection_file.to_string_lossy())
-    {
-        argv.extend([
-            "-f".to_string(),
-            config.connection_file.to_string_lossy().into_owned(),
-        ]);
+        argv[0] = python.clone();
     }
     if config.numpy_legacy_repr && config.spec.language.eq_ignore_ascii_case("python") {
         let exec_lines = serde_json::to_string(&vec![NUMPY_STARTUP])?;
@@ -458,10 +459,81 @@ fn launch_local(config: &LocalConfig) -> Result<(ConnectionInfo, Child)> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    for (key, value) in &config.spec.env {
+        command.env(key, expand_kernel_env(value));
+    }
     let child = command
         .spawn()
         .with_context(|| format!("launch Jupyter kernel with {}", argv.join(" ")))?;
     Ok((connection, child))
+}
+
+fn expand_kernel_env(value: &str) -> String {
+    fn is_name_start(byte: u8) -> bool {
+        byte == b'_' || byte.is_ascii_alphabetic()
+    }
+
+    fn is_name_byte(byte: u8) -> bool {
+        is_name_start(byte) || byte.is_ascii_digit()
+    }
+
+    let bytes = value.as_bytes();
+    let mut expanded = String::with_capacity(value.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            let character = value[index..]
+                .chars()
+                .next()
+                .expect("valid UTF-8 boundary while expanding kernel env");
+            expanded.push(character);
+            index += character.len_utf8();
+            continue;
+        }
+
+        if index + 1 < bytes.len() && bytes[index + 1] == b'$' {
+            expanded.push('$');
+            index += 2;
+            continue;
+        }
+
+        let (name_start, name_end, end) = if index + 2 < bytes.len()
+            && bytes[index + 1] == b'{'
+            && is_name_start(bytes[index + 2])
+        {
+            let name_start = index + 2;
+            let mut name_end = name_start + 1;
+            while name_end < bytes.len() && is_name_byte(bytes[name_end]) {
+                name_end += 1;
+            }
+            if name_end < bytes.len() && bytes[name_end] == b'}' {
+                (name_start, name_end, name_end + 1)
+            } else {
+                expanded.push('$');
+                index += 1;
+                continue;
+            }
+        } else if index + 1 < bytes.len() && is_name_start(bytes[index + 1]) {
+            let name_start = index + 1;
+            let mut name_end = name_start + 1;
+            while name_end < bytes.len() && is_name_byte(bytes[name_end]) {
+                name_end += 1;
+            }
+            (name_start, name_end, name_end)
+        } else {
+            expanded.push('$');
+            index += 1;
+            continue;
+        };
+
+        let name = &value[name_start..name_end];
+        match std::env::var(name) {
+            Ok(replacement) => expanded.push_str(&replacement),
+            Err(_) => expanded.push_str(&value[index..end]),
+        }
+        index = end;
+    }
+    expanded
 }
 
 fn new_connection(_kernel_name: &str) -> Result<ConnectionInfo> {
@@ -1137,6 +1209,7 @@ fn emit_error(events: &Sender<Value>, channel: &str, error: impl std::fmt::Displ
 
 use reqwest::Url;
 use reqwest::blocking::Client;
+use tungstenite::http::Request;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket, connect};
 
@@ -1195,11 +1268,15 @@ fn prepare_external(name: &str) -> Result<PreparedKernel> {
         base_url.path().trim_end_matches('/')
     );
     websocket_url.set_path(&path);
-    if let Some(token) = &token {
-        websocket_url.query_pairs_mut().append_pair("token", token);
-    }
-    let (socket, _) =
-        connect(websocket_url.as_str()).context("connect Jupyter Server websocket")?;
+    let websocket_request = if let Some(token) = &token {
+        Request::builder()
+            .uri(websocket_url.as_str())
+            .header("Authorization", format!("token {token}"))
+            .body(())?
+    } else {
+        Request::builder().uri(websocket_url.as_str()).body(())?
+    };
+    let (socket, _) = connect(websocket_request).context("connect Jupyter Server websocket")?;
     let socket = set_websocket_timeout(socket);
     Ok(PreparedKernel::External(ExternalPrepared {
         config: ExternalConfig {
@@ -1499,8 +1576,10 @@ fn request_value(
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
     use std::time::Instant;
+    use tempfile::tempdir;
 
     #[test]
     fn hmac_signature_is_lowercase_sha256_over_four_json_parts() {
@@ -1582,6 +1661,61 @@ mod tests {
         assert_eq!(loaded.stdin_port, 1003);
         assert_eq!(loaded.control_port, 1004);
         assert_eq!(loaded.key, b"key");
+    }
+
+    #[test]
+    fn local_launch_preserves_kernelspec_argv_and_environment() {
+        let directory = tempdir().unwrap();
+        let script = directory.path().join("record.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\noutput=\"$3\"\n{ printf '%s\\n' \"$#\" \"$1\" \"$2\" \"$IPYNB_TEST_ENV\"; } > \"$output\"\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let spec_path = directory.path().join("kernel.json");
+        fs::write(
+            &spec_path,
+            serde_json::to_vec(&json!({
+                "argv": [
+                    "/bin/sh",
+                    script,
+                    "{connection_file}",
+                    "--connection={connection_file}",
+                    "{resource_dir}/observed"
+                ],
+                "env": {"IPYNB_TEST_ENV": "${HOME}"},
+                "language": "python"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let config = LocalConfig {
+            spec: read_kernel_spec(&spec_path, "test").unwrap(),
+            // An absolute interpreter path belongs to the kernelspec and must
+            // not be replaced by the selected Python executable.
+            python: Some("/bin/false".to_string()),
+            numpy_legacy_repr: false,
+            connection_file: directory.path().join("connection.json"),
+        };
+        let (_connection, mut child) = launch_local(&config).unwrap();
+        assert!(child.wait().unwrap().success());
+
+        let observed = fs::read_to_string(directory.path().join("observed")).unwrap();
+        let mut lines = observed.lines();
+        assert_eq!(lines.next(), Some("3"));
+        assert_eq!(lines.next(), Some(config.connection_file.to_str().unwrap()));
+        let connection_argument = format!("--connection={}", config.connection_file.display());
+        assert_eq!(lines.next(), Some(connection_argument.as_str()));
+        let expected_env = std::env::var("HOME").ok();
+        assert_eq!(lines.next(), expected_env.as_deref());
+        assert_eq!(lines.next(), None);
+
+        let _ = fs::remove_file(&config.connection_file);
     }
 
     #[test]
