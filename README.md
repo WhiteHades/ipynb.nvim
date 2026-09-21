@@ -27,12 +27,11 @@
 
 ## Install
 
-Check prerequisites and install missing tools:
+Check prerequisites and install missing tools with curl and Bash:
 
 ```sh
-git clone https://github.com/WhiteHades/ipynb.nvim
-cd ipynb.nvim
-bash scripts/prerequisites.sh --install
+ipynb_setup=$(curl -fsSL https://raw.githubusercontent.com/WhiteHades/ipynb.nvim/main/scripts/prerequisites.sh) &&
+  bash -c "$ipynb_setup" -- --install
 ```
 
 The helper previews changes before installing. Omit `--install` to check only.
