@@ -316,7 +316,6 @@ local function activate_notebook_buffer(bufnr)
   if vim.b[bufnr].completion == nil then vim.b[bufnr].completion = true end
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].buftype = "acwrite"
-  vim.wo.spell = false
 
   if not vim.api.nvim_buf_is_valid(bufnr) or not is_ipynb_buffer(bufnr) then
     return
@@ -422,7 +421,6 @@ function M.setup(opts)
   autocmd({ "BufReadPost", "BufEnter" }, function(ev) activate_notebook_buffer(ev.buf) end)
   autocmd({ "BufWinEnter", "BufWritePost", "InsertLeave", "TextChanged" }, function(ev)
     require("ipynb.markdown").enable(ev.buf)
-    vim.wo.spell = false
   end)
   autocmd("InsertEnter", function(ev) require("ipynb.markdown").disable(ev.buf) end)
   autocmd("BufWritePost", function(ev)
@@ -446,9 +444,6 @@ function M.setup(opts)
   end)
   apply_notebook_output_highlights()
   vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = apply_notebook_output_highlights })
-  vim.api.nvim_create_autocmd("User", { group = group, pattern = "VeryLazy", callback = function()
-    if is_ipynb_buffer(0) then vim.wo.spell = false end
-  end })
   vim.api.nvim_create_autocmd("LspAttach", { group = group, callback = function(ev)
     local client = vim.lsp.get_client_by_id(ev.data.client_id)
     if not client then return end
