@@ -93,6 +93,16 @@ keys                                                           *ipynb-keys*
 
 existing keyboard mappings are not replaced. keymaps=false disables notebook keys.
 
+commands                                                    *ipynb-commands*
+
+:IpynbEnterOutput / :IpynbHideOutput  open and focus / close full output
+:IpynbImagePopup                     enlarge the current cell's first image
+:IpynbOpenInBrowser                  open the current cell's HTML in a browser
+:IpynbYankOutput                     copy text output to the unnamed register
+:IpynbYankOutput!                    copy text output to the system clipboard
+:IpynbInterrupt / :IpynbRestart      interrupt execution / restart the kernel
+:IpynbInfo                           show kernel information
+
 images                                                        *ipynb-images*
 
 image.nvim outputs fit their available space, including enlarging small images.
