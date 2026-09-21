@@ -1,42 +1,37 @@
 # credits
 
-## included source
+## molten and magma
 
-`rplugin/python3/ipynb_runtime/` and `lua/ipynb/molten_*` derive from
-[whitehades/molten-nvim](https://github.com/WhiteHades/molten-nvim/tree/e2094c8f28ed94a25176177b3be4ef1eeff65f8c),
-commit `e2094c8f28ed94a25176177b3be4ef1eeff65f8c`, under gpl-3.0.
+thanks to ben lubas and contributors for
+[molten-nvim](https://github.com/benlubas/molten-nvim), and daniel csillag and
+contributors for [magma-nvim](https://github.com/dccsillag/magma-nvim), which
+molten grew out of.
 
-molten is maintained by ben lubas and contributors and derives from
-[magma-nvim](https://github.com/dccsillag/magma-nvim) by daniel csillag and
-contributors. their work provides kernel communication, cell execution,
-output windows, persistence, and image integration. the original licence is
-preserved in [license](LICENSE).
+the python runtime in `rplugin/python3/ipynb_runtime/` and the
+`lua/ipynb/molten_*` files come from [my molten fork](https://github.com/WhiteHades/molten-nvim/tree/e2094c8f28ed94a25176177b3be4ef1eeff65f8c),
+at commit `e2094c8f28ed94a25176177b3be4ef1eeff65f8c`. i've modified them for
+this plugin. the original gpl-3.0 licence is included in [LICENSE](LICENSE).
 
-changes in this project include independent python, lua and command namespaces,
-completed-cell output controls, terminal progress rendering, runtime directory
-creation, optional numpy book-style display, shared-kernel cleanup, and safer
-output persistence. the notebook setup and markdown
-renderer were consolidated from whitehades' dotfiles and book editor integration.
-these are modified sources, not an unchanged upstream release.
+the notebook setup and markdown renderer came from my dotfiles and book editor
+integration. i reuse render-markdown.nvim's highlight groups when available
+and fall back to neovim's otherwise.
 
-## installed dependencies
+## dependencies
 
-these projects remain separate packages. their source is not copied here.
+these projects are installed separately and keep their own licences.
 
-| project | contribution | licence |
+| project | used for | licence |
 | --- | --- | --- |
-| [jupytext.nvim](https://github.com/goerz/jupytext.nvim) by michael goerz | notebook conversion in neovim | mit |
-| [quarto-nvim](https://github.com/quarto-dev/quarto-nvim) by posit and contributors | cell selection and execution routing | gpl-2.0-or-later |
-| [otter.nvim](https://github.com/jmbuhr/otter.nvim) by jannik buhr and contributors | embedded python buffers and language services | mit |
-| [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) | parsers and syntax queries | apache-2.0 |
-| [image.nvim](https://github.com/3rd/image.nvim) by andrei neculaesei and contributors | terminal images | mit |
+| [jupytext.nvim](https://github.com/goerz/jupytext.nvim) by michael goerz | notebook conversion | mit |
+| [quarto-nvim](https://github.com/quarto-dev/quarto-nvim) by posit and contributors | selecting and running cells | gpl-2.0-or-later |
+| [otter.nvim](https://github.com/jmbuhr/otter.nvim) by jannik buhr and contributors | language support inside cells | mit |
+| [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) | parsing and syntax highlighting | apache-2.0 |
+| [image.nvim](https://github.com/3rd/image.nvim) by andrei neculaesei and contributors | plots in the terminal | mit |
 
-python tools come from [jupyter](https://jupyter.org),
+the python side uses [jupyter](https://jupyter.org),
 [jupytext](https://github.com/mwouts/jupytext),
 [pynvim](https://github.com/neovim/pynvim), [numpy](https://numpy.org),
 [matplotlib](https://matplotlib.org), and [pillow](https://python-pillow.org).
-each retains its own licence. uv is an optional installer; neovim, lazy.nvim,
-lazyvim, imagemagick and treesitter provide the editor and installation tooling.
 
-render-markdown.nvim inspired the existing highlight integration. its groups
-are reused when available, with native neovim highlight fallbacks otherwise.
+also thanks to the people behind neovim, lazy.nvim, lazyvim, imagemagick,
+tree-sitter, and uv for the tools this setup uses.
