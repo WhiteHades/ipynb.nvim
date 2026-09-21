@@ -2,7 +2,14 @@
 
 ## Prerequisites
 
-Run `bash scripts/prerequisites.sh --install` from the repository checkout.
+Download and run the standalone helper with curl and Bash. No clone is needed.
+
+```sh
+ipynb_setup=$(curl -fsSL https://raw.githubusercontent.com/WhiteHades/ipynb.nvim/main/scripts/prerequisites.sh) &&
+  bash -c "$ipynb_setup" -- --install
+```
+
+If you already have a checkout, `bash scripts/prerequisites.sh --install` works too.
 The helper previews commands, asks before installing, and checks again afterwards.
 Run it without `--install` for a read-only check. `--yes` accepts the install
 plan, `--no-images` skips ImageMagick, and `NO_COLOR=1` disables color.
@@ -10,9 +17,8 @@ plan, `--no-images` skips ImageMagick, and `NO_COLOR=1` disables color.
 It supports apt, dnf, pacman, and Homebrew on macOS. System packages may need
 sudo; pacman performs a full system upgrade. On macOS, finish Apple's
 command-line tools installer before rerunning the helper if prompted.
-Unsupported systems get a checklist. If Git is missing, download the
-[repository ZIP](https://github.com/WhiteHades/ipynb.nvim/archive/refs/heads/main.zip)
-and extract it first.
+Unsupported systems get a checklist. Only curl and Bash are needed to start
+the helper; it can install Git along with the other missing prerequisites.
 
 Required tools:
 
