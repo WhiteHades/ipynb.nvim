@@ -32,6 +32,3 @@ the python side uses [jupyter](https://jupyter.org),
 [jupytext](https://github.com/mwouts/jupytext),
 [pynvim](https://github.com/neovim/pynvim), [numpy](https://numpy.org),
 [matplotlib](https://matplotlib.org), and [pillow](https://python-pillow.org).
-
-also thanks to the people behind neovim, lazy.nvim, lazyvim, imagemagick,
-tree-sitter, and uv for the tools this setup uses.
