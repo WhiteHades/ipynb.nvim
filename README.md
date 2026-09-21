@@ -13,15 +13,15 @@
 <p>Jupyter notebooks in Neovim. Edit cells, run code, and view plots in your terminal.</p>
 
 <p>
-<a href="https://github.com/WhiteHades/ipynb.nvim/releases"><img src="https://img.shields.io/github/v/release/WhiteHades/ipynb.nvim?style=flat-square" alt="Latest release"></a>
+<a href="https://github.com/WhiteHades/ipynb.nvim/releases"><img src="https://img.shields.io/github/v/release/WhiteHades/ipynb.nvim?style=flat-square&amp;cacheSeconds=300" alt="Latest release"></a>
 <a href="https://github.com/WhiteHades/ipynb.nvim/actions/workflows/tests.yml"><img src="https://github.com/WhiteHades/ipynb.nvim/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
 <a href="https://neovim.io"><img src="https://img.shields.io/badge/Neovim-0.12%2B-57a143?style=flat-square&amp;logo=neovim&amp;logoColor=white" alt="Neovim 0.12 or newer"></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="GPL-3.0 license"></a>
+<a href="https://github.com/WhiteHades/ipynb.nvim/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="GPL-3.0 license"></a>
 </p>
 
 <p><a href="#install">Install</a> · <a href="#use">Use</a> · <a href="#help">Help</a></p>
 
-<a href="assets/notebook.png"><img src="assets/notebook.png" alt="A notebook running in Neovim" width="900"></a>
+<a href="https://github.com/WhiteHades/ipynb.nvim/blob/main/assets/notebook.png"><img src="https://raw.githubusercontent.com/WhiteHades/ipynb.nvim/main/assets/notebook.png" alt="A notebook running in Neovim" width="900"></a>
 
 </div>
 
