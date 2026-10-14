@@ -131,7 +131,10 @@ function M.check()
   local options = ipynb.options or {}
   local python = options.python or "python3"
   local jupytext = options.jupytext or "jupytext"
-  local project = require("ipynb.project").resolve(vim.api.nvim_get_current_buf(), options)
+  local buf = vim.api.nvim_get_current_buf()
+  if not vim.api.nvim_buf_get_name(buf):match("%.ipynb$") then buf = vim.fn.bufnr("#") end
+  local project = buf >= 0 and vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):match("%.ipynb$")
+    and require("ipynb.project").resolve(buf, options) or {}
   local kernel_python = options.kernel_python or project.python
   local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
   local binary = options.binary or root .. "/native/target/release/ipynb-engine"
@@ -153,7 +156,7 @@ function M.check()
   elseif project.error then
     vim.health.warn(project.error)
   else
-    vim.health.info("Notebook execution uses an explicitly selected or registered Jupyter kernel")
+    vim.health.info("Open a notebook and use :IpynbInfo to check its execution environment")
   end
 
   report_ipynb_commands()
