@@ -5,10 +5,40 @@ install                                                        *ipynb*
 use lazy.nvim's package spec, including on lazyvim: >lua
   { "WhiteHades/ipynb.nvim", lazy = false, opts = {} }
 <
-:Lazy sync installs Lua dependencies, the managed Python environment, and the
-Rust engine. Rust/Cargo and a C/C++ compiler are required for the build.
-Restart after installation or a backend update.
-:IpynbInstall repairs the managed environment. :checkhealth ipynb checks setup.
+:Lazy sync installs Lua dependencies and runs the notebook installer.
+:IpynbInstall runs the same installer to repair or update the runtime.
+Both check scripts/prerequisites.sh before helper, parser, or engine setup.
+If all required tools are ready, no prerequisite installation runs. Missing
+tools open a terminal with an install plan and a confirmation prompt, including
+sudo when needed. A successful check continues installation. Headless Neovim
+stops with a shell command instead of waiting for input.
+
+The default build needs Neovim 0.12+, uv 0.13.1+, Rust/Cargo 1.88+, Git, curl,
+tar, pkg-config, a C/C++ compiler, and tree-sitter-cli 0.26.1+. Inline plots need
+ImageMagick's magick command and a compatible terminal, such as Kitty or Ghostty.
+The engine and parsers build from source; no prebuilt engine is installed.
+
+New helper environments use Python 3.15.0 through uv, separate from project Python.
+Existing helper environments are reused. System Python, venv, and ensurepip are
+not required. From the plugin checkout: >sh
+  uv run --no-project --python 3.15.0 -- scripts/setup.py --venv /path/to/helper/venv
+<
+To check host tools without installing them, run: >sh
+  bash scripts/prerequisites.sh --check
+<
+Use --install to preview changes and ask before installing. --yes explicitly
+accepts the plan without a confirmation prompt; sudo may still need a password.
+--no-images skips ImageMagick. --python-backend skips Rust engine build
+requirements, but parser tools are still needed. Installing tree-sitter-cli
+may still need Rust. Set backend="python" in setup options to use that backend.
+
+The helper supports apt, dnf, pacman, and Homebrew. Pacman also upgrades the
+system. Missing or old uv and Rust use the supported system facility or an
+official upstream installer when packages are unavailable or too old. The Rust
+fallback can select Rust 1.88.0 as your default toolchain. User installers do
+not edit shell profiles. Put ~/.local/bin and ~/.cargo/bin on PATH before
+running uv or restarting Neovim.
+Restart after installation or a backend update. :checkhealth ipynb checks setup.
 
 configuration                                              *ipynb-options*
 

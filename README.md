@@ -19,7 +19,7 @@
 <a href="https://github.com/WhiteHades/ipynb.nvim/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="GPL-3.0 license"></a>
 </p>
 
-<p><a href="#install">Install</a> · <a href="#use">Use</a> · <a href="#help">Help</a></p>
+<p><a href="#install">Install</a> | <a href="#use">Use</a> | <a href="#help">Help</a></p>
 
 <a href="https://github.com/WhiteHades/ipynb.nvim/blob/main/assets/notebook.png"><img src="https://raw.githubusercontent.com/WhiteHades/ipynb.nvim/main/assets/notebook.png" alt="A notebook running in Neovim" width="900"></a>
 
@@ -27,18 +27,8 @@
 
 ## Install
 
-Check prerequisites and install missing tools with curl and Bash:
-
-```sh
-ipynb_setup=$(curl -fsSL https://raw.githubusercontent.com/WhiteHades/ipynb.nvim/main/scripts/prerequisites.sh) &&
-  bash -c "$ipynb_setup" -- --install
-```
-
-The helper previews changes before installing. Omit `--install` to check only.
-Supports apt, dnf, pacman, and Homebrew; pacman also upgrades the system.
-See [requirements and other setups](doc/install.md) if anything remains missing.
-
-For LazyVim, create `~/.config/nvim/lua/plugins/ipynb.lua`:
+Use Neovim 0.12 or newer. For LazyVim, create
+`~/.config/nvim/lua/plugins/ipynb.lua`:
 
 ```lua
 return {
@@ -47,8 +37,19 @@ return {
 ```
 
 For plain lazy.nvim, add the same spec to your setup. Run `:Lazy sync`, restart
-Neovim, then open `nvim example.ipynb`. Notebook tools install automatically.
+Neovim after installation finishes, then open `nvim example.ipynb`.
 A missing or empty file opens with one empty code cell.
+
+The build and `:IpynbInstall` check host tools before setting up the helper,
+parsers, and Rust engine. Missing tools open a terminal with an install plan
+and a confirmation prompt. System packages may need sudo. A headless install
+stops with a shell command instead of waiting for input. If all required tools
+are ready, no prerequisite installation runs.
+
+New helper environments use Python 3.15.0 through uv, separate from project environments.
+The Rust engine and parsers build from source and need compiler tools.
+See [requirements and other setups](doc/install.md) for the standalone checker,
+supported package managers, and installation without a plugin manager.
 
 ## Use
 
@@ -95,12 +96,19 @@ Automatic project setup requires the default Rust backend. See
 
 - `:checkhealth ipynb` checks setup; `:IpynbInstall` repairs the runtime.
 - `:help ipynb` covers configuration, commands, and image controls.
-- [Installation details](doc/install.md) · [Releases](https://github.com/WhiteHades/ipynb.nvim/releases) · [Report an issue](https://github.com/WhiteHades/ipynb.nvim/issues)
+- [Installation details](doc/install.md), [releases](https://github.com/WhiteHades/ipynb.nvim/releases), and [issue reports](https://github.com/WhiteHades/ipynb.nvim/issues).
 
 Built on the customised Molten runtime and the Jupyter ecosystem.
-[Credits and provenance](CREDITS.md) · [GPL-3.0](LICENSE)
+[Credits and provenance](CREDITS.md), [GPL-3.0](LICENSE).
 
 ## Testing
+
+The focused installer checks use isolated command substitutes and real headless
+Neovim, without installing system packages:
+
+```sh
+cargo test --locked --manifest-path native/Cargo.toml --test installer --test editor_install
+```
 
 `native/tests/project_workflow.rs` is an ignored Rust E2E test that uses installed
 Neovim plugins. Set `IPYNB_TEST_PLUGINS` to their directory and `IPYNB_PYRIGHT`

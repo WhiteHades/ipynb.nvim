@@ -52,8 +52,7 @@ def create_environment(venv: Path, requested_python: str | None) -> None:
     uv = shutil.which("uv")
     if uv:
         command = [uv, "venv"]
-        if requested_python:
-            command.extend(["--python", requested_python])
+        command.extend(["--python", requested_python or "3.15.0"])
         command.append(str(venv))
     else:
         command = [creator_python(requested_python), "-m", "venv", str(venv)]

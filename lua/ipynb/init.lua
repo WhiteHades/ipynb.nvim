@@ -1,4 +1,4 @@
-local M = { version = "0.1.0" }
+local M = { version = "0.1.2" }
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
 
 local notebook_pattern = "*.ipynb"
@@ -381,6 +381,7 @@ local function activate_notebook_buffer(bufnr)
 end
 
 function M.init(opts)
+  require("ipynb.install").path()
   local venv = vim.fn.stdpath("data") .. "/ipynb.nvim/venv"
   M.options = vim.tbl_deep_extend("force", {
     python = vim.g.python3_host_prog or venv .. "/bin/python",
@@ -413,11 +414,11 @@ function M.init(opts)
   vim.g.ipynb_virt_lines_off_by_1 = true
 end
 
-function M.install()
-  if not M.options then M.init() end
+local function install_runtime()
   local venv = vim.fn.stdpath("data") .. "/ipynb.nvim/venv"
   if M.options.python == venv .. "/bin/python" then
-    local result = vim.system({ "python3", root .. "/scripts/setup.py", "--venv", venv }, { text = true }):wait()
+    local result = vim.system({ "uv", "run", "--no-project", "--python", "3.15.0", "--",
+      root .. "/scripts/setup.py", "--venv", venv }, { text = true }):wait()
     if result.code ~= 0 then error(result.stderr .. result.stdout) end
   else
     local result = vim.system({ M.options.python, "-c",
@@ -434,11 +435,18 @@ function M.install()
   else
     vim.cmd("TSInstallSync markdown markdown_inline python")
   end
+  -- Refresh the runtime cache when installation creates a parser directory.
+  vim.o.runtimepath = vim.o.runtimepath
+  for _, language in ipairs({ "markdown", "markdown_inline", "python" }) do
+    local ok, loaded, err = pcall(vim.treesitter.language.add, language)
+    if not ok or not loaded then
+      error("Notebook parser installation failed for " .. language .. ": " .. tostring(err or loaded))
+    end
+  end
   if M.options.backend == "python" then
     vim.cmd("runtime! plugin/rplugin.vim")
     vim.cmd("UpdateRemotePlugins")
   else
-    if vim.fn.executable("cargo") ~= 1 then error("install Rust with rustup, then run :IpynbInstall again") end
     local result = vim.system({ "cargo", "build", "--release", "--locked" },
       { cwd = root .. "/native", text = true }):wait()
     if result.code ~= 0 then error("Rust engine build failed: " .. (result.stderr or result.stdout)) end
@@ -446,9 +454,14 @@ function M.install()
   vim.notify("notebook runtime installed. restart neovim before opening notebooks.")
 end
 
+function M.install()
+  if not M.options then M.init() end
+  return require("ipynb.install").run(root, M.options, install_runtime)
+end
+
 function M.setup(opts)
   M.init(opts)
-  vim.api.nvim_create_user_command("IpynbInstall", M.install, { desc = "Install notebook python tools" })
+  vim.api.nvim_create_user_command("IpynbInstall", M.install, { desc = "Check prerequisites and install notebook tools" })
   require("jupytext").setup({
     jupytext = M.options.jupytext,
     format = "md:markdown",

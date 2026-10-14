@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import subprocess
@@ -107,10 +108,17 @@ def configure_neovim(plugin_root: Path, interpreter: Path, nvim: str = "nvim") -
     )
 
 
-def install_native(nvim: str = "nvim") -> Path:
+def install_native(nvim: str = "nvim", images: bool = True) -> Path:
     """Install dependencies and the managed runtime for this native checkout."""
 
     plugin_root = Path(__file__).resolve().parents[1]
+    prerequisites = ["bash", str(plugin_root / "scripts" / "prerequisites.sh"), "--install"]
+    if not images:
+        prerequisites.append("--no-images")
+    run(prerequisites)
+    os.environ["PATH"] = os.pathsep.join(
+        filter(None, [str(Path.home() / ".local" / "bin"), str(Path.home() / ".cargo" / "bin"), os.environ.get("PATH")])
+    )
     data = nvim_data_path(nvim)
     expected_root = native_plugin_path(data)
     if plugin_root != expected_root:
@@ -127,8 +135,11 @@ def install_native(nvim: str = "nvim") -> Path:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--no-images", action="store_true", help="skip ImageMagick for text-only notebooks")
+    args = parser.parse_args()
     try:
-        install_native()
+        install_native(images=not args.no_images)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"ipynb.nvim native setup failed: {error}", file=sys.stderr)
         return 1

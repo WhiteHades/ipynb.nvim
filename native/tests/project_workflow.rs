@@ -237,7 +237,10 @@ vim.fn.writefile({{vim.json.encode(result)}}, vim.env.IPYNB_REPORT)
         assert!(item["preview"][0]["lines"].to_string().contains("KEEP"));
         assert_eq!(item["preview"][2]["source"], "");
         assert_eq!(item["running"].as_array().unwrap().len(), 1);
-        assert_eq!(item["unsaved"], true, "running unchanged code did not mark outputs as unsaved");
+        assert_eq!(
+            item["unsaved"], true,
+            "running unchanged code did not mark outputs as unsaved"
+        );
         let project = path.parent().unwrap().parent().unwrap();
         let executable = project.join(".venv/bin/python");
         let rendered = item["cells"].to_string();

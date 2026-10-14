@@ -149,6 +149,7 @@ function M.check()
 
   local python_ok = report_command("python", python, true)
   report_command("jupytext", jupytext, true)
+  if options.auto_setup ~= false then report_command("uv (automatic project setup)", "uv", true) end
   if kernel_python then
     report_command("project kernel python", kernel_python, true)
     report_import(kernel_python, "project ipykernel", "ipykernel")
