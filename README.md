@@ -47,8 +47,8 @@ return {
 ```
 
 For plain lazy.nvim, add the same spec to your setup. Run `:Lazy sync`, restart
-Neovim, then open `nvim example.ipynb`. Notebook tools install automatically;
-a new path creates a blank notebook.
+Neovim, then open `nvim example.ipynb`. Notebook tools install automatically.
+A missing or empty file opens with one empty code cell.
 
 ## Use
 
@@ -72,6 +72,25 @@ precedence; modified enter keys depend on your terminal.
 `:w` saves cells and outputs. Reopening restores results without rerunning code.
 Restarting the kernel keeps displayed outputs but clears Python variables.
 
+Python notebooks use the nearest Python project's `.venv` for execution and
+Pyright completion. On the first run, the plugin uses `uv` to set up a missing
+environment and install `ipykernel` if needed. A standalone notebook gets
+`pyproject.toml`, `uv.lock`, and `.venv` in its own directory, even inside an
+unrelated Git repository. An existing environment with `ipykernel` stays unchanged.
+
+First setup needs `uv` and may need network access. If setup fails, the plugin
+reports the error without using global execution packages. Set
+`opts = { auto_setup = false }` to manage the environment yourself.
+The editor's helper Python stays separate from project dependencies.
+
+With the default Rust backend, opening a notebook restores saved results without
+starting a kernel. The kernel starts when you first run code. `:IpynbInfo` shows
+its interpreter, working directory, and selection reason. Use `:IpynbInit` to
+choose another registered or shared kernel. Named, non-Python, and remote kernel
+choices remain available.
+Automatic project setup requires the default Rust backend. See
+`:help ipynb-options` for overrides.
+
 ## Help
 
 - `:checkhealth ipynb` checks setup; `:IpynbInstall` repairs the runtime.
@@ -80,3 +99,16 @@ Restarting the kernel keeps displayed outputs but clears Python variables.
 
 Built on the customised Molten runtime and the Jupyter ecosystem.
 [Credits and provenance](CREDITS.md) · [GPL-3.0](LICENSE)
+
+## Testing
+
+`native/tests/project_workflow.rs` is an ignored Rust E2E test that uses installed
+Neovim plugins. Set `IPYNB_TEST_PLUGINS` to their directory and `IPYNB_PYRIGHT`
+to the Pyright executable. Use `IPYNB_TEST_PYTHON` for the helper environment's
+Python and `IPYNB_PROJECT_PYTHON` for another environment's Python.
+Both environments need `ipykernel`. If parsers live elsewhere, set
+`IPYNB_TEST_SITE` to their runtime directory. Build the Rust engine first, then run:
+
+```sh
+cargo test --manifest-path native/Cargo.toml --test project_workflow -- --ignored
+```

@@ -13,8 +13,9 @@ local function is_ipynb_otter_buffer(bufnr)
   return name:match("%.ipynb%.otter%.py$") ~= nil
 end
 
-local function notebook_python_path()
-  return M.options.kernel_python or M.options.python
+local function notebook_python_path(bufnr)
+  if not require("ipynb.native").active then return M.options.kernel_python or M.options.python end
+  return require("ipynb.project").python(bufnr or 0, M.options)
 end
 
 local function notebook_runtime_ready()
@@ -58,20 +59,41 @@ local function apply_notebook_output_highlights()
   vim.api.nvim_set_hl(0, "IpynbVirtualText", { fg = info_fg, bg = float_bg })
 end
 
-local function configure_notebook_python_lsp(client)
-  local python_path = notebook_python_path()
+local function configure_notebook_python_lsp(client, bufnr)
+  local python_path = notebook_python_path(bufnr)
+  if not python_path then return end
+  local project_root = require("ipynb.project").resolve(bufnr, M.options).root
+  if project_root and client.config.root_dir ~= project_root then
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(bufnr) or not client.attached_buffers[bufnr] then return end
+      local config = vim.deepcopy(client.config)
+      config.root_dir = project_root
+      config.settings = vim.tbl_deep_extend("force", config.settings or {}, { python = { pythonPath = python_path } })
+      vim.lsp.buf_detach_client(bufnr, client.id)
+      if next(client.attached_buffers) == nil then client.stop() end
+      vim.lsp.start(config, { bufnr = bufnr })
+    end)
+    return
+  end
+  if client.settings and client.settings.python and client.settings.python.pythonPath == python_path then return end
 
   client.settings = client.settings or {}
   client.settings.python = vim.tbl_deep_extend("force", client.settings.python or {}, {
     pythonPath = python_path,
-    analysis = vim.tbl_deep_extend("force", (client.settings.python or {}).analysis or {}, {
-      autoSearchPaths = true,
-      diagnosticMode = "openFilesOnly",
-      useLibraryCodeForTypes = true,
-    }),
   })
 
-  client.notify("workspace/didChangeConfiguration", { settings = client.settings })
+  client:notify("workspace/didChangeConfiguration", { settings = client.settings })
+end
+
+function M.refresh_python_lsp(bufnr)
+  local path = vim.api.nvim_buf_get_name(bufnr) .. ".otter.py"
+  local otter = vim.fn.bufnr(path)
+  if otter < 0 then return end
+  for _, client in ipairs(vim.lsp.get_clients({ bufnr = otter })) do
+    if client.name == "pyright" or client.name == "basedpyright" then
+      configure_notebook_python_lsp(client, otter)
+    end
+  end
 end
 
 local function ensure_notebook_rendering(bufnr)
@@ -110,26 +132,26 @@ local function available_kernels()
   return kernels
 end
 
-local function default_kernel_name()
+local function default_kernel_name(bufnr)
+  local native = require("ipynb.native").active
+  local requested = not native and (M.options.kernel or vim.b[bufnr].ipynb_read_kernel or "python3") or nil
+  local selection = vim.b[bufnr].ipynb_kernel_selection or require("ipynb.project").resolve(bufnr, M.options, requested)
+  if selection.error then error(selection.error) end
+  if selection.python then return selection end
+  if selection.kernel and (selection.kernel:match("^https?://") or selection.kernel:match("%.json$")) then return selection end
   local kernels = available_kernels()
-  local requested = M.options.kernel
-  local path = vim.api.nvim_buf_get_name(0)
-  local read_kernel = vim.b.ipynb_read_kernel
-  if not requested and read_kernel ~= nil then
-    requested = read_kernel or nil
-  elseif not requested and vim.fn.filereadable(path) == 1 then
-    local ok, notebook = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
-    if ok then requested = ((notebook.metadata or {}).kernelspec or {}).name end
-  end
+  local requested = selection.kernel
   if requested then
-    return vim.tbl_contains(kernels, requested) and requested or nil
+    return vim.tbl_contains(kernels, requested) and selection or nil
   end
 
   if vim.tbl_contains(kernels, "python3") then
-    return "python3"
+    selection.kernel = "python3"
+    return selection
   end
 
-  return kernels[1]
+  selection.kernel = kernels[1]
+  return selection.kernel and selection or nil
 end
 
 local function ensure_notebook_kernel(bufnr)
@@ -142,17 +164,18 @@ local function ensure_notebook_kernel(bufnr)
     return false
   end
 
-  if vim.b[bufnr].notebook_kernel_initialized then
-    local status_ok, status = pcall(require, "ipynb.molten_status")
-    if status_ok and status.initialized() == "Ipynb" then
-      return true
-    end
-
-    vim.b[bufnr].notebook_kernel_initialized = false
+  local native = require("ipynb.native")
+  local running = native.active and native.running(bufnr) or vim.api.nvim_buf_call(bufnr, function()
+    return vim.fn.IpynbRunningKernels(true)
+  end)
+  if #running > 0 then return true end
+  vim.b[bufnr].notebook_kernel_initialized = false
+  local selected, selection = pcall(default_kernel_name, bufnr)
+  if not selected then
+    vim.notify(tostring(selection), vim.log.levels.ERROR, { title = "notebook kernel" })
+    return false
   end
-
-  local kernel = default_kernel_name()
-  if not kernel then
+  if not selection then
     vim.notify(
       "the requested Jupyter kernel is unavailable. see :checkhealth ipynb.",
       vim.log.levels.WARN,
@@ -161,14 +184,15 @@ local function ensure_notebook_kernel(bufnr)
     return false
   end
 
-  local ok = pcall(vim.api.nvim_buf_call, bufnr, function()
-    vim.cmd("IpynbInit " .. kernel)
-
-    local path = vim.api.nvim_buf_get_name(bufnr)
-    if path ~= "" and vim.fn.filereadable(path) == 1 then
-      pcall(vim.cmd, "IpynbImportOutput")
+  local ok, err = pcall(vim.api.nvim_buf_call, bufnr, function()
+    if native.active then
+      native.initialize(bufnr, selection)
+    else
+      vim.cmd({ cmd = "IpynbInit", args = { selection.kernel } })
+      if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then vim.cmd("IpynbImportOutput") end
     end
   end)
+  if not ok then vim.notify(tostring(err), vim.log.levels.ERROR, { title = "notebook kernel" }); return false end
 
   if ok and #vim.fn.IpynbRunningKernels(true) > 0 then
     vim.b[bufnr].notebook_kernel_initialized = true
@@ -230,11 +254,31 @@ local function set_notebook_keymaps(bufnr)
   end
 
   local function run_with_kernel(fn)
-    return function()
+    return function(prepared)
+      if vim.b[bufnr].ipynb_setup_pending then return end
+      local native = require("ipynb.native")
+      local selection = native.active and (vim.b[bufnr].ipynb_kernel_selection or require("ipynb.project").resolve(bufnr, M.options)) or nil
+      if not prepared and selection and selection.kernel == "project" and #native.running(bufnr) == 0 then
+        local tick, cursor = vim.api.nvim_buf_get_changedtick(bufnr), vim.api.nvim_win_get_cursor(0)
+        vim.b[bufnr].ipynb_setup_pending = true
+        selection.bufnr = bufnr
+        require("ipynb.project").prepare(selection, M.options, function(err)
+          if not vim.api.nvim_buf_is_valid(bufnr) then return end
+          vim.b[bufnr].ipynb_setup_pending = nil
+          if err then vim.notify(err, vim.log.levels.ERROR); return end
+          if vim.api.nvim_buf_get_changedtick(bufnr) ~= tick then
+            vim.notify("Notebook Python is ready. Run the cell again because the notebook changed during setup.")
+            return
+          end
+          vim.api.nvim_buf_call(bufnr, function()
+            vim.api.nvim_win_set_cursor(0, cursor)
+            M.refresh_python_lsp(bufnr)
+            run_with_kernel(fn)(true)
+          end)
+        end)
+        return
+      end
       if not ensure_notebook_kernel(bufnr) then
-        vim.notify("notebook kernel is unavailable. try <localleader>i.", vim.log.levels.WARN, {
-          title = "notebook kernel",
-        })
         return
       end
 
@@ -258,12 +302,16 @@ local function set_notebook_keymaps(bufnr)
   local run_cell = run_with_kernel(runner.run_cell)
   local run_all = run_with_kernel(runner.run_all)
   local run_above = run_with_kernel(runner.run_above)
+  local run_and_advance = run_with_kernel(function()
+    runner.run_cell()
+    require("ipynb.cells").advance()
+  end)
   local function advance()
     if not require("ipynb.cells").current() then
       vim.notify("place the cursor inside a code cell", vim.log.levels.INFO)
       return
     end
-    if run_cell() then require("ipynb.cells").advance() end
+    run_and_advance()
   end
   local function restart()
     if not reinit_notebook_kernel(bufnr) then
@@ -337,7 +385,8 @@ function M.init(opts)
   M.options = vim.tbl_deep_extend("force", {
     python = vim.g.python3_host_prog or venv .. "/bin/python",
     images = true,
-    auto_init = true,
+    auto_init = false,
+    auto_setup = true,
     numpy_legacy_repr = true,
     keymaps = true,
     output = { preview_lines = 8 },
@@ -411,7 +460,8 @@ function M.setup(opts)
     update = true,
     async_write = false,
   })
-  require("ipynb.native").setup(M.options)
+  local native = require("ipynb.native").setup(M.options)
+  if not native and (opts or {}).auto_init == nil then M.options.auto_init = true end
   require("ipynb.notebook_io").setup(require("jupytext"))
   local group = vim.api.nvim_create_augroup("ipynb", { clear = true })
   local function autocmd(events, callback)
@@ -451,8 +501,8 @@ function M.setup(opts)
       vim.schedule(function()
         if vim.api.nvim_buf_is_valid(ev.buf) then vim.lsp.buf_detach_client(ev.buf, client.id) end
       end)
-    elseif M.options.kernel_python and client.name == "pyright" and is_ipynb_otter_buffer(ev.buf) then
-      configure_notebook_python_lsp(client)
+    elseif (client.name == "pyright" or client.name == "basedpyright") and is_ipynb_otter_buffer(ev.buf) then
+      configure_notebook_python_lsp(client, ev.buf)
     end
   end })
 end

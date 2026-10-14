@@ -1,5 +1,21 @@
 local M = {}
 
+function M.spans(bufnr)
+  local parser = vim.treesitter.get_parser(bufnr, "markdown")
+  local tree = parser:parse()[1]
+  local query = vim.treesitter.query.parse("markdown", "(fenced_code_block) @cell")
+  local result = {}
+  for _, node in query:iter_captures(tree:root(), bufnr) do
+    local first, _, last, col = node:range()
+    local start, finish = first + 1, last - (col == 0 and 2 or 1)
+    if start <= finish then
+      local line = vim.api.nvim_buf_get_lines(bufnr, finish, finish + 1, false)[1] or ""
+      result[#result + 1] = { begin = { start, 0 }, ["end"] = { finish, #line } }
+    end
+  end
+  return result
+end
+
 local function cells()
   local parser = vim.treesitter.get_parser(0, "markdown")
   local tree = parser:parse()[1]

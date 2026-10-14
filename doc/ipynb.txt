@@ -17,20 +17,41 @@ all options are optional. do not set python unless using an existing environment
   opts = {
     python = "/path/to/venv/bin/python",
     jupytext = "/path/to/venv/bin/jupytext",
-    kernel = "python3",
-    kernel_python = "/path/to/project/.venv/bin/python",
     images = false,
     numpy_legacy_repr = true,
     keymaps = true,
-    auto_init = true,
+    auto_init = false,
+    auto_setup = true,
     output = { preview_lines = 8 },
   }
 <
-python supplies Jupytext conversion and kernel discovery. The Rust process
-owns execution state and Jupyter transport. kernel selects a registered kernel;
-otherwise the notebook's kernelspec is used. kernel_python optionally configures
-pyright for notebook buffers. it does not select the execution kernel.
-completion and diagnostics use your existing python language server setup.
+python supplies Jupytext conversion and kernel discovery, independently of
+project Python. The Rust process owns execution state and Jupyter transport.
+Python notebooks with a generic python3 kernelspec use the nearest project's
+.venv, resolved from the notebook path. Without a Python project, the notebook's
+directory is the root, even inside an unrelated Git repository. No user kernel
+registration is needed.
+
+auto_setup=true is the default. On first execution, uv sets up a missing .venv.
+For an existing pyproject.toml, the plugin runs uv sync with --locked when uv.lock
+exists. It adds ipykernel with uv add --dev only if ipykernel is missing.
+For a standalone notebook, uv init --bare --vcs none --name notebook-env and
+uv add --dev ipykernel create pyproject.toml, uv.lock, and .venv in its directory.
+An existing .venv with ipykernel stays unchanged.
+
+Setup needs uv and may need network access. Failures report an error without
+using global execution packages. Set auto_setup=false to disable automatic
+installation and provide a .venv with ipykernel yourself.
+
+kernel overrides automatic selection. Named notebook kernels and non-Python
+kernels remain registered-kernel selections. :IpynbInit opens a picker including
+project Python and registered/shared kernels. Remote kernels and connection
+files remain available. Local kernels start in the notebook's project directory.
+
+Completion and diagnostics use your existing Python language server. Pyright
+and basedpyright use the selected local Python, with separate project roots.
+kernel_python remains an optional LSP override; it does not select execution.
+Do not point python or python3_host_prog at every project's environment.
 
 numpy_legacy_repr uses numpy's legacy="1.25" setting in new local python kernels.
 it changes display, not values or dtypes. external kernels keep their own setup.
@@ -39,7 +60,8 @@ previously saved outputs retain their original text until those cells run again.
 custom runtimes must provide requirements.txt themselves. the build step checks
 them and builds the Rust engine without changing their Python packages.
 With build=false, run :IpynbInstall after updates to rebuild the engine.
-An existing g:python3_host_prog is respected. Register project kernels with ipykernel.
+An existing g:python3_host_prog is respected. Other environments can still be
+registered with ipykernel and chosen explicitly.
 
 without lazy.nvim, install the dependencies listed in lazy.lua with your package
 manager, put this plugin on runtimepath, call require('ipynb').init(opts) before
@@ -54,8 +76,11 @@ saving                                                       *ipynb-saving*
 :w converts the editable Markdown and writes cell outputs in one atomic update.
 The persistent Jupytext helper preserves notebook metadata, cell ids, and
 attachments. Rust handles JSON output and rejects writes when the file changed
-on disk since opening or saving. Reopening imports outputs without executing
-cells. Kernel memory is not stored; save model checkpoints separately.
+on disk since opening or saving. Reopening imports outputs without starting a
+kernel or executing cells by default. A missing or empty .ipynb opens with one
+empty code cell. Kernel memory is not stored; save model checkpoints
+separately. Exporting outputs also rejects concurrent disk changes. Ambiguous
+output-to-cell matches are rejected instead of writing results into the wrong cell.
 
 rust backend                                                *ipynb-rust*
 
@@ -71,8 +96,15 @@ compatibility backend; it requires :UpdateRemotePlugins after installation.
 An installation without a built Rust engine also uses that compatibility path.
 Set binary="/path/to/ipynb-engine" to use a separately built executable.
 
+Kernels start on first execution by default. auto_init=true starts one on open.
+If a kernel exits, saved and unsaved displayed results stay available. Running
+the next cell starts a replacement without rerunning earlier cells. :IpynbInfo
+shows the selected interpreter, working directory, and selection reason.
+
 The compatibility backend optionally uses requirements-rust.txt (jiter) for JSON
 reads. IPYNB_DISABLE_RUST=1 disables that decoder, not the Rust backend itself.
+It retains its previous registered-kernel selection and initialization behavior.
+Automatic project setup and opening without a kernel require the Rust backend.
 
 keys                                                           *ipynb-keys*
 
@@ -89,7 +121,7 @@ keys                                                           *ipynb-keys*
 <localleader>o  open and focus output; normal vim motions scroll it
 <localleader>O  close output; q and <Esc> also work inside the output window
 <localleader>x  open the first image in the terminal viewer
-<localleader>i  restart kernel; keep displayed outputs
+<localleader>i  restart kernel; keep displayed outputs and clear variables
 
 existing keyboard mappings are not replaced. keymaps=false disables notebook keys.
 

@@ -45,13 +45,20 @@ local function set_filetype(jupytext, path, metadata, bufnr)
 end
 
 local function open_notebook(jupytext, path, bufnr)
+  if bufnr == 0 then bufnr = vim.api.nvim_get_current_buf() end
   local result = vim.fn.IpynbNotebookRead(path, option(jupytext, "new_template"))
   local text = result.text or ""
   local lines = vim.split(text, "\n", { plain = true })
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   -- Kernel selection follows BufReadPost; reuse metadata already decoded here.
   vim.b[bufnr].ipynb_read_kernel = ((result.metadata or {}).kernelspec or {}).name or false
+  vim.b[bufnr].ipynb_language = ((result.metadata or {}).language_info or {}).name
+    or ((result.metadata or {}).kernelspec or {}).language
   set_filetype(jupytext, path, result.metadata or {}, bufnr)
+  if require("ipynb.native").active and vim.fn.filereadable(path) == 1 then
+    require("ipynb.native").request("preview", { buf = bufnr, path = path, lines = lines,
+      spans = require("ipynb.cells").spans(bufnr) })
+  end
   vim.api.nvim_set_option_value("modified", false, { buf = bufnr })
   return result.metadata
 end

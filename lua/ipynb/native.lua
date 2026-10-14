@@ -1,4 +1,4 @@
-local M = {}
+local M = { active = false }
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
 local job, options, serial = nil, nil, 0
 local pending, carry = {}, ""
@@ -6,7 +6,6 @@ local state = { kernels = {}, buffers = {} }
 local runtime_options = {}
 local cell_status, copied_output = {}, {}
 local closing = false
-local initialized = false
 
 local function ui() return require("ipynb.native_ui") end
 local function notify(message) vim.notify(message, vim.log.levels.ERROR, { title = "ipynb" }) end
@@ -74,6 +73,23 @@ local function receive(message)
     end
   elseif message.event == "state" then
     state = message.state
+    for buf, ids in pairs(state.buffers or {}) do
+      buf = tonumber(buf)
+      if buf and vim.api.nvim_buf_is_valid(buf) and #ids == 1 then
+        local detail = (state.details or {})[ids[1]] or {}
+        vim.b[buf].ipynb_kernel_id = ids[1]
+        if detail.kernel then
+          vim.b[buf].ipynb_kernel_selection = {
+            kernel = detail.kernel, python = detail.kernel == "project" and detail.python or nil,
+            root = detail.cwd, cwd = detail.cwd, reason = detail.reason,
+          }
+        end
+        if detail.language and detail.language:match("^python") then
+          vim.b[buf].ipynb_execution_python = detail.python
+          require("ipynb").refresh_python_lsp(buf)
+        end
+      end
+    end
   elseif message.event == "ready" then
     user_event("IpynbKernelReady", { kernel_id = message.kernel })
   elseif message.event == "input" then
@@ -130,7 +146,6 @@ local function start()
       for buf in pairs(state.buffers or {}) do ui().clear(tonumber(buf)) end
       state = { kernels = {}, buffers = {} }
       cell_status, copied_output = {}, {}
-      initialized = false
       if code ~= 0 and not closing then vim.schedule(function() notify("Notebook engine exited: " .. code) end) end
     end,
   })
@@ -177,6 +192,10 @@ local function buffer_kernels(buf)
   return state.buffers[tostring(buf)] or state.buffers[buf] or {}
 end
 
+function M.running(buf)
+  return buffer_kernels(buf)
+end
+
 local function final_kernels(buf)
   local result = {}
   for _, id in ipairs(buffer_kernels(buf)) do
@@ -203,8 +222,27 @@ local function context(lines)
   local cursor = vim.api.nvim_win_get_cursor(0)
   local params = { buf = buf, path = vim.api.nvim_buf_get_name(buf),
     cursor = { cursor[1] - 1, cursor[2] }, positions = ui().positions(buf) }
-  if lines then params.lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false) end
+  if lines then
+    params.lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    params.spans = require("ipynb.cells").spans(buf)
+  end
   return params
+end
+
+function M.initialize(buf, selection, shared)
+  local params = vim.api.nvim_buf_call(buf, function() return context() end)
+  params.kernel, params.python = selection.kernel, selection.python
+  params.cwd, params.reason, params.shared = selection.cwd, selection.reason, shared or false
+  params.replace = vim.b[buf].ipynb_kernel_id
+  if not shared then user_event("IpynbInitPre") end
+  local actual = M.request("init", params)
+  if not (state.details or {})[actual] or not state.details[actual].kernel then
+    vim.b[buf].ipynb_kernel_selection = selection
+  end
+  vim.b[buf].ipynb_kernel_id = actual
+  vim.b[buf].notebook_kernel_initialized = true
+  if not shared then user_event("IpynbInitPost") end
+  return actual
 end
 
 local function current()
@@ -222,6 +260,12 @@ local function kernel(params, requested, callback)
   vim.ui.select(kernels, { prompt = "Select a kernel: " }, function(id)
     if id then params.kernel = id; callback(params) end
   end)
+end
+
+local function saved_kernel(params, requested, callback)
+  local ids = (state.attachments or state.buffers)[tostring(params.buf)] or {}
+  if not requested and #ids == 1 then params.kernel = ids[1]; return callback(params) end
+  return kernel(params, requested, callback)
 end
 
 local function evaluate(first, last, requested, source)
@@ -258,27 +302,39 @@ function M.call(name, args, bang)
     return args[1] and buffer_kernels(vim.api.nvim_get_current_buf()) or state.kernels
   end
   if name == "IpynbStatusLineKernels" then return table.concat(M.call("IpynbRunningKernels", args), " ") end
-  if name == "IpynbStatusLineInit" then return initialized and "Ipynb" or "" end
+  if name == "IpynbStatusLineInit" then return #buffer_kernels(vim.api.nvim_get_current_buf()) > 0 and "Ipynb" or "" end
   if name == "IpynbInit" then
     local p = context()
     local shared = args[1] == "shared"
     local requested = args[shared and 2 or 1]
     local function init(id, share)
-      p.kernel, p.shared = id, share
-      if not share then user_event("IpynbInitPre") end
-      local actual = M.request("init", p)
-      initialized = true
-      if not share then
-        user_event("IpynbInitPost")
+      local selection = require("ipynb.project").resolve(p.buf, options, id)
+      if selection.kernel == "project" and not share then
+        selection.bufnr = p.buf
+        require("ipynb.project").prepare(selection, options, function(err)
+          if err then notify(err); return end
+          if vim.api.nvim_buf_is_valid(p.buf) then
+            M.initialize(p.buf, require("ipynb.project").resolve(p.buf, options, "project"))
+          end
+        end)
+        return
       end
-      return actual
+      return M.initialize(p.buf, selection, share)
     end
     if requested then return init(requested, shared) end
     local choices = {}
+    local project = require("ipynb.project").resolve(p.buf, options, "project")
+    if not shared and project.kernel == "project" then
+      choices[#choices + 1] = { id = "Project Python: " .. (project.python or project.root .. "/.venv"), selection = project }
+    end
     if not shared then for _, id in ipairs(M.request("available")) do choices[#choices+1] = { id=id, shared=false } end end
     for _, id in ipairs(state.kernels) do choices[#choices+1] = { id=id, shared=true } end
     vim.ui.select(choices, { prompt = "Select a kernel: ", format_item = function(k) return k.id .. (k.shared and " (shared)" or "") end },
-      function(k) if k then init(k.id, k.shared) end end)
+      function(k)
+        if k then
+          if k.selection then init("project", false) else init(k.id, k.shared) end
+        end
+      end)
     return
   end
   if name == "IpynbDeinit" or name == "IpynbOnBufferUnload" then
@@ -288,7 +344,12 @@ function M.call(name, args, bang)
     local buf = tonumber(requested) or vim.api.nvim_get_current_buf()
     local attached = buffer_kernels(buf)
     if #attached == 0 then
-      if unload then return end
+      if unload then
+        if job then M.request("unload", { buf = buf }) end
+        ui().clear(buf)
+        clear_buffer_state(buf)
+        return
+      end
       error("Ipynb is not initialized in this buffer; run `:IpynbInit` to initialize.")
     end
     local final = final_kernels(buf)
@@ -385,19 +446,19 @@ function M.call(name, args, bang)
   end
   if name == "IpynbImportOutput" or name == "IpynbExportOutput" then
     local p = context(true); p.path = notebook_path(args[1] or p.path); p.overwrite = bang or false
-    return kernel(p,args[2],function(value) return M.request(name == "IpynbImportOutput" and "import" or "export",value) end)
+    if name == "IpynbImportOutput" and #buffer_kernels(p.buf) == 0 then return M.request("preview", p) end
+    return saved_kernel(p,args[2],function(value) return M.request(name == "IpynbImportOutput" and "import" or "export",value) end)
   end
   if name == "IpynbSave" then
     local p = context(true)
     p.path = args[1] or saved_state_path()
-    return kernel(p, args[2], function(value) return M.request("save", value) end)
+    return saved_kernel(p, args[2], function(value) return M.request("save", value) end)
   end
   if name == "IpynbLoad" then
     local p = context(true)
     p.shared = args[1] == "shared"
     p.path = args[p.shared and 2 or 1] or saved_state_path()
     local result = M.request("load", p)
-    initialized = true
     return result
   end
   if name == "IpynbUpdateOption" then
@@ -412,8 +473,22 @@ function M.call(name, args, bang)
   if name == "IpynbInfo" then
     local attached = buffer_kernels(vim.api.nvim_get_current_buf())
     local lines = { " press q or <esc> to close this window", "", " Ipynb Info", "",
-      " Initialized: " .. tostring(initialized), "", (" %d active kernel(s), attached to current buffer:"):format(#attached) }
+      " Initialized: " .. tostring(#attached > 0), "", (" %d active kernel(s), attached to current buffer:"):format(#attached) }
     for _, id in ipairs(attached) do lines[#lines + 1] = "   " .. id end
+    local selection = require("ipynb.project").resolve(vim.api.nvim_get_current_buf(), options)
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = " Project: " .. (selection.root or "standalone notebook")
+    if #attached == 0 then
+      lines[#lines + 1] = " Kernel starts on first execution."
+      lines[#lines + 1] = " Python: " .. (selection.python or selection.kernel or "registered kernel")
+      if selection.error then lines[#lines + 1] = " " .. selection.error end
+    end
+    for _, id in ipairs(attached) do
+      local detail = (state.details or {})[id] or {}
+      lines[#lines + 1] = " " .. id .. " interpreter: " .. (detail.python or "remote or non-Python kernel")
+      lines[#lines + 1] = " Working directory: " .. (detail.cwd or "external kernel")
+      lines[#lines + 1] = " Selected by: " .. (detail.reason or "manual kernel selection")
+    end
     local others = {}
     for _, id in ipairs(state.kernels) do if not vim.tbl_contains(attached, id) then others[#others + 1] = id end end
     lines[#lines + 1], lines[#lines + 2] = "", (" %d active kernel(s), not attached to this buffer:"):format(#others)
@@ -520,6 +595,7 @@ function M.register()
 end
 
 function M.setup(opts)
+  M.active = false
   options = opts
   local binary = opts.binary or root .. "/native/target/release/ipynb-engine"
   if opts.backend == "python" then return false end
@@ -528,6 +604,7 @@ function M.setup(opts)
     return false
   end
   runtime_options = configured_options()
+  M.active = true
   ui().configure(runtime_options)
   M.register()
   local group = vim.api.nvim_create_augroup("IpynbNative",{clear=true})

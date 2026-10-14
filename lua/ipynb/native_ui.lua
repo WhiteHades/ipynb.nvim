@@ -828,8 +828,7 @@ function M.sync(buf, cells)
     if type(incoming) == "table" and incoming.id ~= nil then
       local key = tostring(incoming.id)
       local cell = state.by_id[key]
-      local normalized = vim.deepcopy(incoming)
-      normalized.id, normalized.buf = incoming.id, buf
+      local normalized = vim.tbl_extend("force", incoming, { buf = buf })
       local changed = not cell or not vim.deep_equal(cell.data, normalized)
       local previous_status = cell and cell.data and cell.data.status or nil
       if not cell then
@@ -848,7 +847,7 @@ function M.sync(buf, cells)
         }
         state.by_id[key] = cell
       end
-      cell.data = normalized
+      if changed then cell.data = vim.deepcopy(normalized) end
       if cell.ui.hidden and previous_status ~= normalized.status
         and (normalized.status == "hold" or normalized.status == "running") then
         cell.ui.hidden = false
