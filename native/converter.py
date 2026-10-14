@@ -44,7 +44,7 @@ def _read(path: str) -> Any:
 def _read_request(request: dict[str, Any]) -> dict[str, Any]:
     path = Path(str(request.get("path", "")))
     template = Path(str(request.get("template", "")))
-    source = path if path.is_file() else template
+    source = path if path.is_file() and path.stat().st_size else template
     if not source.is_file():
         raise FileNotFoundError(f"notebook or template not found: {source or path}")
 

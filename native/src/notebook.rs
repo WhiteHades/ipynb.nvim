@@ -35,7 +35,7 @@ fn metadata_mtime(metadata: &fs::Metadata) -> Result<Mtime> {
     })
 }
 
-fn file_mtime(path: &Path) -> Result<Option<Mtime>> {
+pub(crate) fn file_mtime(path: &Path) -> Result<Option<Mtime>> {
     match fs::metadata(path) {
         Ok(metadata) => {
             #[cfg(unix)]

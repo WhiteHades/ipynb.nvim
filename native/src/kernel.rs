@@ -50,6 +50,7 @@ pub struct Kernel {
     events: Receiver<Value>,
     worker: Mutex<Option<JoinHandle<()>>>,
     closed: AtomicBool,
+    stopped_reported: AtomicBool,
     restartable: bool,
     language: Option<String>,
 }
@@ -62,6 +63,7 @@ impl Kernel {
         python: Option<&str>,
         numpy_legacy_repr: bool,
         spec_path: Option<&Path>,
+        cwd: Option<&Path>,
     ) -> Result<Self> {
         let (wake, context, wake_receiver) =
             if name.starts_with("http://") || name.starts_with("https://") {
@@ -71,7 +73,7 @@ impl Kernel {
                 let (wake, receiver) = command_wakeup(&context)?;
                 (Some(wake), Some(context), Some(receiver))
             };
-        let prepared = prepare_kernel(name, python, numpy_legacy_repr, spec_path)?;
+        let prepared = prepare_kernel(name, python, numpy_legacy_repr, spec_path, cwd)?;
         let restartable = prepared.restartable();
         let language = prepared.language();
         let (command_tx, command_rx) = mpsc::channel();
@@ -87,6 +89,7 @@ impl Kernel {
             events: event_rx,
             worker: Mutex::new(Some(worker)),
             closed: AtomicBool::new(false),
+            stopped_reported: AtomicBool::new(false),
             restartable,
             language,
         })
@@ -153,9 +156,8 @@ impl Kernel {
         if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
-        self.commands
-            .send(CommandMessage::Shutdown)
-            .context("send shutdown request to kernel worker")?;
+        // A stopped worker has already released its resources; still join it.
+        let _ = self.commands.send(CommandMessage::Shutdown);
         self.notify_worker();
         self.join_worker()
     }
@@ -165,16 +167,39 @@ impl Kernel {
         let mut messages = Vec::new();
         loop {
             match self.events.try_recv() {
-                Ok(message) => messages.push(message),
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+                Ok(message) => {
+                    if message["msg_type"] == "kernel_stopped" {
+                        self.stopped_reported.store(true, Ordering::SeqCst);
+                    }
+                    messages.push(message);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if !self.stopped_reported.swap(true, Ordering::SeqCst)
+                        && !self.closed.load(Ordering::SeqCst)
+                    {
+                        messages.push(runtime_error(
+                            "kernel_stopped",
+                            "runtime",
+                            "Kernel worker stopped",
+                        ));
+                    }
+                    break;
+                }
             }
         }
         messages
     }
 
-    fn ensure_open(&self) -> Result<()> {
-        if self.closed.load(Ordering::SeqCst) {
-            Err(anyhow!("Jupyter kernel is shut down"))
+    pub fn ensure_open(&self) -> Result<()> {
+        if self.closed.load(Ordering::SeqCst)
+            || self.stopped_reported.load(Ordering::SeqCst)
+            || self
+                .worker
+                .lock()
+                .is_ok_and(|worker| worker.as_ref().is_some_and(JoinHandle::is_finished))
+        {
+            Err(anyhow!("Jupyter kernel is stopped; initialize it again"))
         } else {
             Ok(())
         }
@@ -209,10 +234,10 @@ impl Drop for Kernel {
             let _ = self.commands.send(CommandMessage::Shutdown);
             self.notify_worker();
         }
-        if let Ok(mut worker) = self.worker.lock() {
-            if let Some(worker) = worker.take() {
-                let _ = worker.join();
-            }
+        if let Ok(mut worker) = self.worker.lock()
+            && let Some(worker) = worker.take()
+        {
+            let _ = worker.join();
         }
     }
 }
@@ -251,6 +276,7 @@ struct LocalConfig {
     python: Option<String>,
     numpy_legacy_repr: bool,
     connection_file: PathBuf,
+    cwd: Option<PathBuf>,
 }
 
 struct LocalPrepared {
@@ -266,9 +292,9 @@ struct ExternalPrepared {
 }
 
 enum PreparedKernel {
-    Local(LocalPrepared),
+    Local(Box<LocalPrepared>),
     Attached { connection: ConnectionInfo },
-    External(ExternalPrepared),
+    External(Box<ExternalPrepared>),
 }
 
 impl PreparedKernel {
@@ -289,9 +315,14 @@ fn prepare_kernel(
     python: Option<&str>,
     numpy_legacy_repr: bool,
     spec_path: Option<&Path>,
+    cwd: Option<&Path>,
 ) -> Result<PreparedKernel> {
     if name.starts_with("http://") || name.starts_with("https://") {
         return prepare_external(name);
+    }
+    if let Some(spec_path) = spec_path {
+        return prepare_local(name, python, numpy_legacy_repr, spec_path, cwd)
+            .map(|local| PreparedKernel::Local(Box::new(local)));
     }
 
     let path = Path::new(name);
@@ -302,9 +333,9 @@ fn prepare_kernel(
         });
     }
 
-    let spec_path = spec_path
-        .ok_or_else(|| anyhow!("local kernel {name} requires an authoritative kernelspec path"))?;
-    prepare_local(name, python, numpy_legacy_repr, spec_path).map(PreparedKernel::Local)
+    Err(anyhow!(
+        "local kernel {name} requires an authoritative kernelspec path"
+    ))
 }
 
 fn prepare_local(
@@ -312,8 +343,9 @@ fn prepare_local(
     python: Option<&str>,
     numpy_legacy_repr: bool,
     spec_path: &Path,
+    cwd: Option<&Path>,
 ) -> Result<LocalPrepared> {
-    let spec = read_kernel_spec(&spec_path, name)
+    let spec = read_kernel_spec(spec_path, name)
         .with_context(|| format!("read kernelspec {}", spec_path.display()))?;
     let connection_file = unique_connection_file()?;
     let config = LocalConfig {
@@ -321,6 +353,7 @@ fn prepare_local(
         python: python.map(str::to_string),
         numpy_legacy_repr,
         connection_file,
+        cwd: cwd.map(Path::to_path_buf),
     };
     let (connection, child) = launch_local(&config)?;
     Ok(LocalPrepared {
@@ -418,11 +451,30 @@ fn launch_local(config: &LocalConfig) -> Result<(ConnectionInfo, Child)> {
     }
 
     let mut command = Command::new(&argv[0]);
+    if let Some(cwd) = &config.cwd {
+        command.current_dir(cwd);
+    }
     command
         .args(&argv[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    let executable = Path::new(&argv[0]);
+    if executable.is_absolute()
+        && let Some(bin) = executable.parent()
+        && let Some(venv) = bin
+            .parent()
+            .filter(|venv| venv.join("pyvenv.cfg").is_file())
+    {
+        let mut paths = vec![bin.to_owned()];
+        if let Some(path) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&path));
+        }
+        command.env("VIRTUAL_ENV", venv).env(
+            "PATH",
+            std::env::join_paths(paths).context("build kernel virtualenv PATH")?,
+        );
+    }
     for (key, value) in &config.spec.env {
         command.env(key, expand_kernel_env(value));
     }
@@ -623,22 +675,22 @@ impl ZmqTransport {
         }
         let identity = Uuid::new_v4().to_string();
         let shell = connect_socket(
-            &context,
+            context,
             zmq::DEALER,
             &connection,
             connection.shell_port,
             identity.as_bytes(),
         )?;
-        let iopub = connect_iopub(&context, &connection, connection.iopub_port)?;
+        let iopub = connect_iopub(context, &connection, connection.iopub_port)?;
         let stdin = connect_socket(
-            &context,
+            context,
             zmq::DEALER,
             &connection,
             connection.stdin_port,
             identity.as_bytes(),
         )?;
         let control = connect_socket(
-            &context,
+            context,
             zmq::DEALER,
             &connection,
             connection.control_port,
@@ -1027,7 +1079,7 @@ impl ZmqWorker {
                     config,
                     mut child,
                     connection,
-                } = local;
+                } = *local;
                 let transport = match ZmqTransport::connect(&context, connection) {
                     Ok(transport) => transport,
                     Err(error) => {
@@ -1115,15 +1167,15 @@ fn worker_main(
     wake: Option<zmq::Socket>,
 ) {
     match prepared {
-        PreparedKernel::External(external) => run_external_worker(external, commands, events),
+        PreparedKernel::External(external) => run_external_worker(*external, commands, events),
         prepared => match (context, wake) {
             (Some(context), Some(wake)) => {
                 match ZmqWorker::from_prepared(prepared, context, wake) {
                     Ok(worker) => run_zmq_worker(worker, commands, events),
-                    Err(error) => emit_error(&events, "startup", error),
+                    Err(error) => emit_stopped(&events, "startup", error),
                 }
             }
-            _ => emit_error(
+            _ => emit_stopped(
                 &events,
                 "startup",
                 "local ZMQ kernel has no command wake socket",
@@ -1141,7 +1193,7 @@ fn run_zmq_worker(
     match worker.transport.send_kernel_info(&session.session_id) {
         Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
         Err(error) => {
-            emit_error(&events, "shell", error);
+            emit_stopped(&events, "shell", error);
             worker.shutdown(&session.session_id);
             return;
         }
@@ -1164,18 +1216,18 @@ fn run_zmq_worker(
         let now = Instant::now();
         if now.duration_since(last_child_check) >= Duration::from_millis(250) {
             last_child_check = now;
-            if let Some(child) = &mut worker.child {
-                if let Ok(Some(status)) = child.try_wait() {
-                    emit_error(&events, "process", format!("Kernel exited: {status}"));
-                    break;
-                }
+            if let Some(child) = &mut worker.child
+                && let Ok(Some(status)) = child.try_wait()
+            {
+                emit_stopped(&events, "process", format!("Kernel exited: {status}"));
+                break;
             }
         }
         if session.probe_due(now) {
             match worker.transport.send_kernel_info(&session.session_id) {
                 Ok(msg_id) => session.probe_sent(msg_id, now),
                 Err(error) => {
-                    emit_error(&events, "shell", error);
+                    emit_stopped(&events, "shell", error);
                     break;
                 }
             }
@@ -1189,7 +1241,7 @@ fn run_zmq_worker(
             worker.transport.control.as_poll_item(zmq::POLLIN),
         ];
         if let Err(error) = zmq::poll(&mut poll_items, poll_timeout) {
-            emit_error(&events, "transport", error);
+            emit_stopped(&events, "transport", error);
             break;
         }
         if poll_items[0].get_revents().contains(zmq::POLLIN) {
@@ -1239,7 +1291,8 @@ fn handle_zmq_command(
         CommandMessage::Execute { msg_id, code } => {
             if session.ready {
                 if let Err(error) = worker.execute(&session.session_id, &msg_id, &code) {
-                    emit_error(events, "shell", error);
+                    emit_stopped(events, "shell", error);
+                    return true;
                 }
             } else {
                 session.pending.push_back((msg_id, code));
@@ -1263,7 +1316,7 @@ fn handle_zmq_command(
             match worker.restart(&session.session_id) {
                 Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
                 Err(error) => {
-                    emit_error(events, "restart", error);
+                    emit_stopped(events, "restart", error);
                     return true;
                 }
             }
@@ -1286,8 +1339,8 @@ fn finish_zmq_readiness(
     }
     while let Some((msg_id, code)) = session.pending.pop_front() {
         if let Err(error) = worker.execute(&session.session_id, &msg_id, &code) {
-            emit_error(events, "shell", error);
-            break;
+            emit_stopped(events, "shell", error);
+            return false;
         }
     }
     true
@@ -1305,14 +1358,22 @@ fn ready_message() -> Value {
 }
 
 fn emit_error(events: &Sender<Value>, channel: &str, error: impl std::fmt::Display) {
-    let _ = events.send(json!({
+    let _ = events.send(runtime_error("transport_error", channel, error));
+}
+
+fn emit_stopped(events: &Sender<Value>, channel: &str, error: impl std::fmt::Display) {
+    let _ = events.send(runtime_error("kernel_stopped", channel, error));
+}
+
+fn runtime_error(kind: &str, channel: &str, error: impl std::fmt::Display) -> Value {
+    json!({
         "channel": channel,
-        "msg_type": "transport_error",
-        "header": { "msg_type": "transport_error" },
+        "msg_type": kind,
+        "header": { "msg_type": kind },
         "parent_header": {},
         "metadata": {},
         "content": { "error": error.to_string() },
-    }));
+    })
 }
 
 use reqwest::Url;
@@ -1396,7 +1457,7 @@ fn prepare_external(name: &str) -> Result<PreparedKernel> {
         }
     };
     let socket = set_websocket_timeout(socket);
-    Ok(PreparedKernel::External(ExternalPrepared {
+    Ok(PreparedKernel::External(Box::new(ExternalPrepared {
         config: ExternalConfig {
             client,
             base_url,
@@ -1404,7 +1465,7 @@ fn prepare_external(name: &str) -> Result<PreparedKernel> {
         },
         kernel_id,
         socket,
-    }))
+    })))
 }
 
 fn join_url(base: &Url, suffix: &str) -> String {
@@ -1448,8 +1509,7 @@ impl ExternalWorker {
             }),
             &json!({}),
         );
-        self.socket
-            .send(Message::Text(message.to_string().into()))?;
+        self.socket.send(Message::Text(message.to_string()))?;
         Ok(())
     }
 
@@ -1461,8 +1521,7 @@ impl ExternalWorker {
             json!({ "value": value }),
             parent,
         );
-        self.socket
-            .send(Message::Text(message.to_string().into()))?;
+        self.socket.send(Message::Text(message.to_string()))?;
         Ok(())
     }
 
@@ -1520,8 +1579,7 @@ impl ExternalWorker {
             json!({}),
             &json!({}),
         );
-        self.socket
-            .send(Message::Text(message.to_string().into()))?;
+        self.socket.send(Message::Text(message.to_string()))?;
         Ok(msg_id)
     }
 }
@@ -1540,7 +1598,7 @@ fn run_external_worker(
     match worker.send_kernel_info(&session.session_id) {
         Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
         Err(error) => {
-            emit_error(&events, "websocket", error);
+            emit_stopped(&events, "websocket", error);
             let _ = worker.shutdown();
             return;
         }
@@ -1563,7 +1621,7 @@ fn run_external_worker(
             match worker.send_kernel_info(&session.session_id) {
                 Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
                 Err(error) => {
-                    emit_error(&events, "websocket", error);
+                    emit_stopped(&events, "websocket", error);
                     break 'worker;
                 }
             }
@@ -1588,16 +1646,20 @@ fn run_external_worker(
                 }
             }
             Ok(Message::Ping(payload)) => {
-                if worker.socket.send(Message::Pong(payload)).is_err() {
+                if let Err(error) = worker.socket.send(Message::Pong(payload)) {
+                    emit_stopped(&events, "websocket", error);
                     break 'worker;
                 }
             }
-            Ok(Message::Close(_)) => break 'worker,
+            Ok(Message::Close(_)) => {
+                emit_stopped(&events, "websocket", "Kernel websocket closed");
+                break 'worker;
+            }
             Ok(_) => {}
             Err(tungstenite::Error::Io(error))
                 if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             Err(error) => {
-                emit_error(&events, "websocket", error);
+                emit_stopped(&events, "websocket", error);
                 break 'worker;
             }
         }
@@ -1618,7 +1680,8 @@ fn handle_external_command(
         CommandMessage::Execute { msg_id, code } => {
             if session.ready {
                 if let Err(error) = worker.execute(&session.session_id, &msg_id, &code) {
-                    emit_error(events, "websocket", error);
+                    emit_stopped(events, "websocket", error);
+                    return true;
                 }
             } else {
                 session.pending.push_back((msg_id, code));
@@ -1640,13 +1703,13 @@ fn handle_external_command(
         CommandMessage::Restart => {
             session.reset();
             if let Err(error) = worker.restart() {
-                emit_error(events, "http", error);
+                emit_stopped(events, "http", error);
                 return true;
             } else {
                 match worker.send_kernel_info(&session.session_id) {
                     Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
                     Err(error) => {
-                        emit_error(events, "websocket", error);
+                        emit_stopped(events, "websocket", error);
                         return true;
                     }
                 }
@@ -1673,14 +1736,13 @@ fn handle_external_message(
     if message.get("channel").is_none() {
         message["channel"] = Value::String("iopub".to_string());
     }
-    if message.get("msg_type").is_none() {
-        if let Some(msg_type) = message
+    if message.get("msg_type").is_none()
+        && let Some(msg_type) = message
             .get("header")
             .and_then(|header| header.get("msg_type"))
             .cloned()
-        {
-            message["msg_type"] = msg_type;
-        }
+    {
+        message["msg_type"] = msg_type;
     }
     let channel = message
         .get("channel")
@@ -1706,8 +1768,8 @@ fn finish_external_readiness(
     }
     while let Some((msg_id, code)) = session.pending.pop_front() {
         if let Err(error) = worker.execute(&session.session_id, &msg_id, &code) {
-            emit_error(events, "websocket", error);
-            break;
+            emit_stopped(events, "websocket", error);
+            return false;
         }
     }
     true
@@ -1826,7 +1888,7 @@ mod tests {
         let script = directory.path().join("record.sh");
         fs::write(
             &script,
-            "#!/bin/sh\noutput=\"$3\"\n{ printf '%s\\n' \"$#\" \"$1\" \"$2\" \"$IPYNB_TEST_ENV\"; } > \"$output\"\n",
+            "#!/bin/sh\noutput=\"$3\"\n{ printf '%s\\n' \"$#\" \"$1\" \"$2\" \"$IPYNB_TEST_ENV\" \"$PWD\" \"$VIRTUAL_ENV\" \"$PATH\"; } > \"$output\"\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&script).unwrap().permissions();
@@ -1851,13 +1913,14 @@ mod tests {
         )
         .unwrap();
 
-        let config = LocalConfig {
+        let mut config = LocalConfig {
             spec: read_kernel_spec(&spec_path, "test").unwrap(),
             // An absolute interpreter path belongs to the kernelspec and must
             // not be replaced by the selected Python executable.
             python: Some("/bin/false".to_string()),
             numpy_legacy_repr: false,
             connection_file: directory.path().join("connection.json"),
+            cwd: Some(directory.path().to_owned()),
         };
         let (_connection, mut child) = launch_local(&config).unwrap();
         assert!(child.wait().unwrap().success());
@@ -1870,8 +1933,52 @@ mod tests {
         assert_eq!(lines.next(), Some(connection_argument.as_str()));
         let expected_env = std::env::var("HOME").ok();
         assert_eq!(lines.next(), expected_env.as_deref());
+        assert_eq!(lines.next(), directory.path().to_str());
+        let expected_venv = std::env::var("VIRTUAL_ENV").unwrap_or_default();
+        assert_eq!(lines.next(), Some(expected_venv.as_str()));
+        let expected_path = std::env::var("PATH").unwrap_or_default();
+        assert_eq!(lines.next(), Some(expected_path.as_str()));
         assert_eq!(lines.next(), None);
 
+        let venv = directory.path().join("venv");
+        let bin = venv.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(venv.join("pyvenv.cfg"), "").unwrap();
+        let python = bin.join("python");
+        std::os::unix::fs::symlink("/bin/sh", &python).unwrap();
+        config.spec.argv[0] = python.to_str().unwrap().to_owned();
+        for explicit in [false, true] {
+            if explicit {
+                config.spec.env.extend([
+                    ("VIRTUAL_ENV".into(), "/custom/venv".into()),
+                    ("PATH".into(), "/custom/bin".into()),
+                ]);
+            }
+            let (_connection, mut child) = launch_local(&config).unwrap();
+            assert!(child.wait().unwrap().success());
+            let observed = fs::read_to_string(directory.path().join("observed")).unwrap();
+            let lines: Vec<_> = observed.lines().collect();
+            assert_eq!(lines[4], directory.path().to_str().unwrap());
+            assert_eq!(
+                lines[5],
+                if explicit {
+                    "/custom/venv"
+                } else {
+                    venv.to_str().unwrap()
+                }
+            );
+            if explicit {
+                assert_eq!(lines[6], "/custom/bin");
+            } else {
+                let paths: Vec<_> = std::env::split_paths(lines[6]).collect();
+                assert_eq!(paths[0], bin);
+                let inherited: Vec<_> = std::env::var_os("PATH")
+                    .into_iter()
+                    .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+                    .collect();
+                assert_eq!(paths[1..], inherited);
+            }
+        }
         let _ = fs::remove_file(&config.connection_file);
     }
 
@@ -2054,7 +2161,7 @@ mod tests {
             }
         });
 
-        let kernel = Kernel::start(path.to_str().unwrap(), None, false, None).unwrap();
+        let kernel = Kernel::start(path.to_str().unwrap(), None, false, None, None).unwrap();
         let request = kernel.execute("2 + 2").unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut messages = Vec::new();
@@ -2077,6 +2184,67 @@ mod tests {
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap();
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn stopped_workers_report_once_reject_execution_and_still_join() {
+        let directory = tempdir().unwrap();
+        let spec = directory.path().join("kernel.json");
+        fs::write(
+            &spec,
+            json!({"argv":["/bin/true"],"language":"r"}).to_string(),
+        )
+        .unwrap();
+        let kernel = Kernel::start("test", None, false, Some(&spec), None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut messages = Vec::new();
+        while Instant::now() < deadline {
+            messages.extend(kernel.drain());
+            if messages
+                .iter()
+                .any(|message| message["msg_type"] == "kernel_stopped")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        kernel.join_worker().unwrap();
+        messages.extend(kernel.drain());
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message["msg_type"] == "kernel_stopped")
+                .count(),
+            1
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|message| message["msg_type"] != "transport_error")
+        );
+        assert!(kernel.execute("do not run").is_err());
+        assert!(kernel.restart().is_err());
+        kernel.shutdown().unwrap();
+        let (commands, receiver) = mpsc::channel();
+        let (events, messages) = mpsc::channel();
+        drop(receiver);
+        drop(events);
+        let kernel = Kernel {
+            commands,
+            wake: None,
+            events: messages,
+            worker: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            stopped_reported: AtomicBool::new(false),
+            restartable: true,
+            language: None,
+        };
+        let messages = kernel.drain();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["msg_type"], "kernel_stopped");
+        assert!(kernel.drain().is_empty());
+        assert!(kernel.execute("do not run").is_err());
+        kernel.shutdown().unwrap();
     }
 
     fn wire_frames(
