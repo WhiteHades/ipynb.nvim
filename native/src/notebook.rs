@@ -2,10 +2,12 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use tempfile::NamedTempFile;
+
+mod converter;
+pub use converter::Converter;
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -280,107 +282,6 @@ pub fn write_atomic(path: &Path, notebook: &Value, expected: Option<&Value>) -> 
 
     let mtime = file_mtime(&target)?.context("notebook disappeared after atomic write")?;
     Ok(json!({"mtime": mtime}))
-}
-
-pub struct Converter {
-    child: Child,
-    input: Option<ChildStdin>,
-    output: Option<BufReader<ChildStdout>>,
-}
-
-impl Converter {
-    pub fn new(python: &str, script: &Path) -> Result<Self> {
-        let mut child = Command::new(python)
-            .arg("-u")
-            .arg(script)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .with_context(|| format!("could not start notebook converter {python}"))?;
-        let input = child
-            .stdin
-            .take()
-            .context("converter stdin was not piped")?;
-        let output = child
-            .stdout
-            .take()
-            .context("converter stdout was not piped")?;
-        Ok(Self {
-            child,
-            input: Some(input),
-            output: Some(BufReader::new(output)),
-        })
-    }
-
-    pub fn call(&mut self, request: &Value) -> Result<Value> {
-        let payload =
-            serde_json::to_string(request).context("could not encode converter request")?;
-        let input = self.input.as_mut().context("converter stdin is closed")?;
-        input
-            .write_all(payload.as_bytes())
-            .context("could not write converter request")?;
-        input
-            .write_all(b"\n")
-            .context("could not terminate converter request")?;
-        input.flush().context("could not flush converter request")?;
-
-        let output = self.output.as_mut().context("converter stdout is closed")?;
-        let mut line = String::new();
-        if output
-            .read_line(&mut line)
-            .context("could not read converter response")?
-            == 0
-        {
-            let status = self.child.try_wait().ok().flatten();
-            bail!(
-                "notebook converter exited{}",
-                status.map(|s| format!(" ({s})")).unwrap_or_default()
-            );
-        }
-        let response: Value = serde_json::from_str(&line).context("invalid converter response")?;
-        if response["ok"] != true {
-            bail!(
-                "notebook converter failed: {}",
-                response["error"]
-                    .as_str()
-                    .unwrap_or("unknown converter error")
-            );
-        }
-        Ok(response["result"].clone())
-    }
-
-    pub fn read(&mut self, path: &Path, template: &Path) -> Result<Value> {
-        self.call(&json!({
-            "op": "read",
-            "path": path.to_string_lossy(),
-            "template": template.to_string_lossy(),
-        }))
-    }
-
-    pub fn convert(&mut self, text: &str, existing: Option<Value>) -> Result<Value> {
-        self.call(&json!({"op": "convert", "text": text, "existing": existing}))
-    }
-}
-
-impl Drop for Converter {
-    fn drop(&mut self) {
-        if let Some(mut input) = self.input.take() {
-            let _ = input.write_all(
-                br#"{"op":"shutdown"}
-"#,
-            );
-            let _ = input.flush();
-        }
-        self.output.take();
-        match self.child.try_wait() {
-            Ok(Some(_)) => {}
-            Ok(None) | Err(_) => {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-            }
-        }
-    }
 }
 
 #[cfg(test)]

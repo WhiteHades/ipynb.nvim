@@ -10,14 +10,8 @@ local function option(jupytext, name)
   return jupytext.get_option(name)
 end
 
-local function registered(name)
-  return vim.fn.exists("*" .. name) == 1 or vim.fn.exists("#FuncUndefined#" .. name) == 1
-end
-
 local function fast_path(jupytext, path)
   return local_notebook(path)
-    and registered("IpynbNotebookRead")
-    and registered("IpynbNotebookWrite")
     and option(jupytext, "format") == "md:markdown"
     and option(jupytext, "autosync") == false
     and option(jupytext, "async_write") == false
@@ -55,7 +49,7 @@ local function open_notebook(jupytext, path, bufnr)
   vim.b[bufnr].ipynb_language = ((result.metadata or {}).language_info or {}).name
     or ((result.metadata or {}).kernelspec or {}).language
   set_filetype(jupytext, path, result.metadata or {}, bufnr)
-  if require("ipynb.native").active and vim.fn.filereadable(path) == 1 then
+  if vim.fn.filereadable(path) == 1 then
     require("ipynb.native").request("preview", { buf = bufnr, path = path, lines = lines,
       spans = require("ipynb.cells").spans(bufnr) })
   end

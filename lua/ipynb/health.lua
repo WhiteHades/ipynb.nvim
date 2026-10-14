@@ -107,7 +107,7 @@ local function report_ipynb_commands()
       return vim.fn.exists("*" .. name) == 1 or vim.fn.exists("#FuncUndefined#" .. name) == 1
     end
     if not registered("IpynbNotebookRead") or not registered("IpynbNotebookWrite") then
-      vim.health.warn("fast notebook I/O is not registered; run :UpdateRemotePlugins and restart Neovim")
+      vim.health.error("Rust notebook I/O is not registered; call require('ipynb').setup() and restart Neovim")
     end
     return true
   end
@@ -138,13 +138,10 @@ function M.check()
   local kernel_python = options.kernel_python or project.python
   local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
   local binary = options.binary or root .. "/native/target/release/ipynb-engine"
-  local native = options.backend ~= "python" and vim.fn.executable(binary) == 1
-  if native then
+  if vim.fn.executable(binary) == 1 then
     vim.health.ok("Rust notebook engine: " .. binary)
-  elseif options.backend == "python" then
-    vim.health.info("Python compatibility backend selected")
   else
-    vim.health.warn("Rust engine is not built; run :IpynbInstall. Python compatibility backend is active.")
+    vim.health.error("Rust engine is missing: " .. binary .. ". Run :IpynbInstall, then restart Neovim.")
   end
 
   local python_ok = report_command("python", python, true)
@@ -171,37 +168,19 @@ function M.check()
 
   if python_ok then
     for _, dependency in ipairs({
-      { "pynvim", "pynvim" },
       { "ipykernel", "ipykernel" },
       { "jupyter client", "jupyter_client" },
       { "jupytext python package", "jupytext" },
       { "nbformat", "nbformat" },
-      { "numpy", "numpy" },
-      { "matplotlib", "matplotlib" },
     }) do
-      if native and dependency[2] == "pynvim" then
-        vim.health.info("Rust backend does not use the Python remote host")
-      else
-        report_import(python, dependency[1], dependency[2])
-      end
+      report_import(python, dependency[1], dependency[2])
     end
-    if native then
-      vim.health.info("Notebook JSON uses Rust serde_json")
-    elseif vim.env.IPYNB_DISABLE_RUST == "1" then
-      vim.health.info("Rust JSON parser is disabled; using Python")
-    elseif run_import(python, "jiter") then
-      vim.health.ok("Rust JSON parser (jiter) is available")
-    else
-      vim.health.info("Optional Rust JSON parser is not installed; using Python")
-    end
+    vim.health.info("Notebook JSON uses Rust serde_json; the helper does not use Neovim's Python host")
   end
 
   if options.images and #vim.api.nvim_list_uis() > 0 then
     report_command("imagemagick", "magick", true)
     report_module("image.nvim", "image", true)
-    if python_ok then
-      report_import(python, "pillow", "PIL")
-    end
   else
     vim.health.info("image output is disabled or this session is headless")
   end

@@ -112,6 +112,11 @@ local ok, err = xpcall(function()
     buffers[index] = buf
     local item = {{ preview = ui.cells(buf), before = native.running(buf), open_ms = (vim.uv.hrtime() - opened) / 1e6 }}
     item.cells = run(buf, index == 1 and 'PROJECT_ONE' or 'PROJECT_TWO')
+    vim.cmd('IpynbEnterOutput')
+    item.output = {{ opened = vim.api.nvim_get_current_buf() ~= buf,
+      text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n') }}
+    vim.cmd('IpynbHideOutput')
+    item.output.closed = vim.api.nvim_get_current_buf() == buf
     item.unsaved = vim.bo[buf].modified
     item.running = native.running(buf)
     vim.wait(10000, function()
@@ -237,6 +242,21 @@ vim.fn.writefile({{vim.json.encode(result)}}, vim.env.IPYNB_REPORT)
         assert!(item["preview"][0]["lines"].to_string().contains("KEEP"));
         assert_eq!(item["preview"][2]["source"], "");
         assert_eq!(item["running"].as_array().unwrap().len(), 1);
+        assert_eq!(item["output"]["opened"], true, "full output did not open");
+        assert!(
+            item["output"]["text"]
+                .as_str()
+                .unwrap()
+                .contains(if index == 0 {
+                    "PROJECT_ONE"
+                } else {
+                    "PROJECT_TWO"
+                })
+        );
+        assert_eq!(
+            item["output"]["closed"], true,
+            "full output did not return focus"
+        );
         assert_eq!(
             item["unsaved"], true,
             "running unchanged code did not mark outputs as unsaved"

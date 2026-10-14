@@ -1,4 +1,4 @@
-local M = { active = false }
+local M = {}
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
 local job, options, serial = nil, nil, 0
 local pending, carry = {}, ""
@@ -601,21 +601,12 @@ function M.register()
 end
 
 function M.setup(opts)
-  M.active = false
   options = opts
-  local binary = opts.binary or root .. "/native/target/release/ipynb-engine"
-  if opts.backend == "python" then return false end
-  if vim.fn.executable(binary) ~= 1 then
-    if opts.backend == "rust" then error("Rust engine is missing; run :IpynbInstall") end
-    return false
-  end
   runtime_options = configured_options()
-  M.active = true
   ui().configure(runtime_options)
   M.register()
   local group = vim.api.nvim_create_augroup("IpynbNative",{clear=true})
-  -- Neovim sources remote-plugin command stubs after package setup. Reclaim
-  -- this plugin's public commands once that runtime file has finished.
+  -- Reclaim commands from stale Python remote-plugin manifests after upgrades.
   vim.api.nvim_create_autocmd("SourcePost",{group=group,pattern="*/plugin/rplugin.vim",callback=M.register})
   vim.api.nvim_create_autocmd("BufUnload",{group=group,callback=function(ev)
     if #buffer_kernels(ev.buf)>0 then pcall(M.call,"IpynbOnBufferUnload",{ev.buf}) end

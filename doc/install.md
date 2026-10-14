@@ -25,9 +25,8 @@ The helper previews commands, asks before installing, and checks again afterward
 Use `--check`, or omit `--install`, for a read-only check. `--yes` explicitly
 accepts the install plan without a confirmation prompt, but sudo may still ask
 for a password. `--no-images` skips ImageMagick, and `NO_COLOR=1` disables color.
-`--python-backend` skips Rust engine build requirements. Parser tools are still
-required, and installing tree-sitter-cli may still need Rust.
-Set `opts = { backend = "python" }` to use the Python backend in Neovim.
+Rust is the only execution backend. The old `--python-backend` flag and
+`backend = "python"` option are no longer supported.
 
 It supports apt, dnf, pacman, and Homebrew on macOS. System packages may need
 sudo; pacman performs a full system upgrade. On macOS, finish Apple's
@@ -35,7 +34,7 @@ command-line tools installer before rerunning the helper if prompted.
 Unsupported systems get a checklist. Only curl and Bash are needed to start
 the helper; it can install Git along with the other missing prerequisites.
 
-The default Rust backend requires:
+The Rust engine requires:
 
 - Neovim 0.12+, uv 0.13.1+, and Rust/Cargo 1.88+.
 - Git, curl, tar, pkg-config, a C/C++ compiler, and tree-sitter-cli 0.26.1+.
@@ -64,6 +63,10 @@ uv run --no-project --python 3.15.0 -- scripts/setup.py \
 
 Existing helper environments are reused. The helper environment stays separate
 from notebook project environments.
+The direct Python requirements are Jupytext and ipykernel. They supply the
+Jupyter and nbformat libraries used for notebook conversion and kernel discovery.
+The helper does not need pynvim, jiter, NumPy, Matplotlib, or Pillow. Install
+plotting packages in each notebook project's environment when its cells need them.
 The exact Python request avoids prereleases. uv 0.13.1 includes the final
 Python 3.15.0 download; older uv catalogs can select a release candidate for 3.15.
 Replace `~/.local/share/nvim` if you use a different Neovim data directory.
@@ -75,9 +78,11 @@ It does not install a terminal or change your Neovim configuration.
 
 ## Custom Python and images
 
-If you set `python3_host_prog`, install this repository's `requirements.txt`
-into that environment first. See `:help ipynb-options` for custom runtimes.
+Set `opts.python` to use a custom helper environment, and install this
+repository's `requirements.txt` into it first. `python3_host_prog` belongs to
+other plugins and is neither read nor changed. See `:help ipynb-options`.
 Set `opts = { images = false }` to disable plots, alongside `--no-images` above.
+Image display uses ImageMagick and Lua providers, not Python plotting packages.
 
 ## Plain Neovim without a plugin manager
 

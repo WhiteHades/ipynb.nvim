@@ -1,0 +1,390 @@
+-- Output contents and image-provider resources; notebook state stays with the caller.
+return function(state)
+  local M = {}
+  local number, notify = state.number, state.notify
+  local saved_fillchars = {}
+
+  function M.image_canvas(win, enabled)
+    if not state.valid_win(win) then
+      if type(win) == "number" then saved_fillchars[win] = nil end
+      return
+    end
+    if enabled then
+      if saved_fillchars[win] == nil then
+        saved_fillchars[win] = vim.api.nvim_get_option_value("fillchars", { scope = "local", win = win })
+      end
+      vim.api.nvim_win_call(win, function() vim.opt_local.fillchars:append({ eob = " " }) end)
+    elseif saved_fillchars[win] ~= nil then
+      pcall(vim.api.nvim_set_option_value, "fillchars", saved_fillchars[win], { scope = "local", win = win })
+      saved_fillchars[win] = nil
+    end
+  end
+
+  local function safe_id(value)
+    return tostring(value):gsub("[^%w_.-]", "_")
+  end
+
+  local none_api = {
+    from_file = function() return nil end,
+    image_size = function() return { width = 0, height = 0 } end,
+    render = function() end,
+    clear = function() end,
+    refresh = function() end,
+    layout_key = function() return {} end,
+  }
+
+  local providers = { none = none_api }
+
+  local function image_nvim_api()
+    if not providers["image.nvim"] then
+      local ok, module = pcall(require, "ipynb.molten_load_image_nvim")
+      providers["image.nvim"] = ok and module.image_api or none_api
+    end
+    return providers["image.nvim"]
+  end
+
+  local function snacks_api()
+    if not providers["snacks.nvim"] then
+      local ok, module = pcall(require, "ipynb.molten_load_snacks_nvim")
+      local api = ok and module and module.snacks_api or nil
+      providers["snacks.nvim"] = api and {
+        from_file = api.from_file,
+        image_size = api.image_size,
+        render = api.render,
+        clear = api.clear,
+        refresh = function() end,
+        layout_key = function() return {} end,
+      } or none_api
+    end
+    return providers["snacks.nvim"]
+  end
+
+  local function wezterm_api()
+    if providers.wezterm then return providers.wezterm end
+    local ok, module = pcall(require, "ipynb.molten_load_wezterm_nvim")
+    local bridge = ok and module and module.wezterm_api or nil
+    if not bridge then
+      providers.wezterm = none_api
+      return providers.wezterm
+    end
+
+    local images = {}
+    local initial_pane
+    local image_pane
+    providers.wezterm = {
+      external = true,
+      from_file = function(path, opts)
+        local id = opts.id or path
+        images[id] = path
+        return id
+      end,
+      image_size = function() return { width = 0, height = 0 } end,
+      layout_key = function() return {} end,
+      clear = function(id) images[id] = nil end,
+      refresh = function() end,
+      render = function(id)
+        local path = images[id]
+        if not path then return end
+        if not initial_pane then initial_pane = bridge.get_pane_id() end
+        if not image_pane then
+          image_pane = bridge.wezterm_ipynb_init(initial_pane, state.options.split_direction, state.options.split_size)
+        end
+        bridge.send_image(path, tostring(image_pane), tostring(initial_pane))
+      end,
+    }
+    return providers.wezterm
+  end
+
+  function M.provider()
+    if state.options.image_provider == "image.nvim" then return image_nvim_api() end
+    if state.options.image_provider == "snacks.nvim" then return snacks_api() end
+    if state.options.image_provider == "wezterm" then return wezterm_api() end
+    return none_api
+  end
+
+  function M.image_records(cell, kind)
+    cell.ui.images[kind] = cell.ui.images[kind] or {}
+    return cell.ui.images[kind]
+  end
+
+  function M.clear_images(cell, kind)
+    local records = M.image_records(cell, kind)
+    for _, record in ipairs(records) do pcall(record.api.clear, record.id) end
+    cell.ui.images[kind] = {}
+    local api = M.provider()
+    if api.refresh then pcall(api.refresh) end
+  end
+
+  function M.border_group(cell)
+    local group = "IpynbOutputBorder"
+    if cell.data.status == "hold" then
+      group = "IpynbOutputBorderQueued"
+    elseif cell.data.status == "running" then
+      group = "IpynbOutputBorderRunning"
+    elseif cell.data.status == "done" and cell.data.success == false then
+      group = "IpynbOutputBorderFail"
+    elseif cell.data.status == "done" then
+      group = "IpynbOutputBorderSuccess"
+    end
+    return group
+  end
+
+  function M.border_with_highlight(border, cell)
+    if not state.options.use_border_highlights or type(border) ~= "table" then return border end
+    local group = M.border_group(cell)
+    border = vim.deepcopy(border)
+    for index, value in ipairs(border) do
+      border[index] = type(value) == "table" and { value[1], group } or { value, group }
+    end
+    return border
+  end
+
+  local function header(cell)
+    local status = cell.data.status or "new"
+    local count = cell.data.execution_count
+    local execution = (count == nil or count == vim.NIL) and "..." or tostring(count)
+    local label
+    if status == "hold" then
+      label = "* On Hold"
+    elseif status == "running" then
+      label = "... Running"
+    elseif status == "done" then
+      label = cell.data.success == false and "✗ Failed" or "✓ Done"
+    else
+      return "╭─ Out[_]: Never Run"
+    end
+    local old = cell.data.old and "[OLD] " or ""
+    local elapsed = ""
+    if not cell.data.old and state.options.output_show_exec_time and cell.data.elapsed ~= nil then
+      local value = tonumber(cell.data.elapsed)
+      elapsed = value and string.format(" %.2fs", value) or (" " .. tostring(cell.data.elapsed))
+    end
+    return ("╭─ %sOut[%s]: %s%s"):format(old, execution, label, elapsed)
+  end
+
+  local function replay_controls(text)
+    if not text:find("[\r\b]") then return text:gsub("\r\n", "\n") end
+    local rows, row, col = { {} }, 1, 1
+    text = text:gsub("\r\n", "\n")
+    for char in text:gmatch("[\0-\127\194-\244][\128-\191]*") do
+      if char == "\n" then
+        rows[#rows + 1], row, col = {}, row + 1, 1
+      elseif char == "\r" then
+        col = 1
+      elseif char == "\b" then
+        col = math.max(1, col - 1)
+      else
+        rows[row][col], col = char, col + 1
+      end
+    end
+    local result = {}
+    for _, chars in ipairs(rows) do result[#result + 1] = table.concat(chars) end
+    return table.concat(result, "\n")
+  end
+
+  local function take_display_width(text, width)
+    if width < 1 or text == "" then return "", text end
+    local chars = vim.fn.strchars(text)
+    local low, high, best = 1, chars, 0
+    while low <= high do
+      local middle = math.floor((low + high) / 2)
+      local part = vim.fn.strcharpart(text, 0, middle)
+      if vim.fn.strdisplaywidth(part) <= width then
+        best, low = middle, middle + 1
+      else
+        high = middle - 1
+      end
+    end
+    if best == 0 then best = 1 end
+    return vim.fn.strcharpart(text, 0, best), vim.fn.strcharpart(text, best)
+  end
+
+  local function wrap_lines(lines, width)
+    if not state.options.wrap_output or width < 1 then return lines end
+    local result = {}
+    for _, value in ipairs(lines) do
+      local line = tostring(value)
+      if line == "" then
+        result[#result + 1] = ""
+      else
+        while vim.fn.strdisplaywidth(line) > width do
+          local part
+          part, line = take_display_width(line, width)
+          result[#result + 1] = part
+        end
+        result[#result + 1] = line
+      end
+    end
+    return result
+  end
+
+  local function truncate_lines(lines)
+    local maximum = math.max(1, number(state.options.virt_text_max_lines, 8) - 2)
+    if #lines <= maximum then return lines end
+    if state.options.virt_text_truncate == "top" and maximum > 2 then
+      local result = { lines[1], ("↑ %d More lines"):format(#lines - maximum) }
+      for index = #lines - maximum + 3, #lines do result[#result + 1] = lines[index] end
+      return result
+    end
+    local result = {}
+    for index = 1, maximum - 1 do result[#result + 1] = lines[index] end
+    result[#result + 1] = ("󰁅 %d More lines "):format(#lines - maximum + 1)
+    return result
+  end
+
+  local function text_lines(segment)
+    local value = segment.lines or segment.text or {}
+    if type(value) == "table" then
+      local result = {}
+      for _, line in ipairs(value) do result[#result + 1] = tostring(line) end
+      return result
+    end
+    return vim.split(replay_controls(tostring(value)), "\n", { plain = true })
+  end
+
+  local function segments(cell)
+    if type(cell.data.segments) == "table" and #cell.data.segments > 0 then return cell.data.segments end
+    local result = {}
+    if type(cell.data.lines) == "table" then result[#result + 1] = { kind = "text", lines = cell.data.lines } end
+    if type(cell.data.images) == "table" then
+      for _, image in ipairs(cell.data.images) do
+        result[#result + 1] = { kind = "image", path = image.path, mimetype = image.mimetype }
+      end
+    end
+    return result
+  end
+
+  local function pad(line, width)
+    line = tostring(line)
+    local display = vim.fn.strdisplaywidth(line)
+    if display > width then
+      line = take_display_width(line, width)
+      display = vim.fn.strdisplaywidth(line)
+    end
+    return line .. string.rep(" ", math.max(0, width - display))
+  end
+
+  function M.render_body(cell, shape, target_buf, target_win, virtual)
+    local kind = virtual and "virt" or "float"
+    M.clear_images(cell, kind)
+    local api = M.provider()
+    local records = M.image_records(cell, kind)
+    local body = {}
+    local remaining = number(state.options.limit_output_chars, 1000000)
+    local image_index = 0
+
+    for _, segment in ipairs(segments(cell)) do
+      if segment.kind == "image" then
+        local location = state.options.image_location
+        local allowed = location == "both" or (virtual and location == "virt") or (not virtual and location == "float")
+        if allowed and type(segment.path) == "string" and segment.path ~= "" then
+          image_index = image_index + 1
+          local id = ("ipynb-native-%d-%s-%d-%d-%s"):format(
+            cell.buf, safe_id(cell.id), cell.revision, image_index, kind
+          )
+          local row = #body + 1
+          local ok, identifier = pcall(api.from_file, segment.path, {
+            id = id,
+            buffer = target_buf,
+            window = target_win,
+            x = 0,
+            y = virtual and shape.row or row,
+            render_offset_top = virtual and row or 0,
+            with_virtual_padding = false,
+            max_width = shape.width,
+            max_height = math.max(0, shape.height - 2),
+          })
+          local size_ok, size = false, nil
+          if ok and identifier then size_ok, size = pcall(api.image_size, identifier) end
+          local height = size_ok and type(size) == "table" and number(size.height, 0) or 0
+          if identifier and api.external then
+            records[#records + 1] = { api = api, id = identifier }
+            pcall(api.render, identifier)
+            body[#body + 1] = segment.fallback or "[Image displayed in external pane]"
+          elseif identifier and height > 0 then
+            records[#records + 1] = { api = api, id = identifier }
+            for _ = 1, height do body[#body + 1] = " " end
+          else
+            if identifier then pcall(api.clear, identifier) end
+            body[#body + 1] = segment.fallback or "[Image unavailable: no usable image renderer]"
+          end
+        end
+      else
+        local lines = text_lines(segment)
+        local joined = replay_controls(table.concat(lines, "\n"))
+        if state.options.limit_output_chars and state.options.limit_output_chars > 0 then
+          if #joined > remaining then
+            joined = joined:sub(1, remaining) .. ("\n...truncated to %d chars"):format(state.options.limit_output_chars)
+          end
+          remaining = math.max(0, remaining - #joined)
+        end
+        lines = wrap_lines(vim.split(joined, "\n", { plain = true }), shape.width)
+        if virtual then lines = truncate_lines(lines) end
+        vim.list_extend(body, lines)
+      end
+    end
+
+    local title = header(cell)
+    if vim.fn.strdisplaywidth(title) > shape.width then title = take_display_width(title, shape.width) end
+    local lines = { title .. string.rep("─", math.max(0, shape.width - vim.fn.strdisplaywidth(title))) }
+    for _, line in ipairs(body) do lines[#lines + 1] = pad(line, shape.width) end
+    lines[#lines + 1] = "╰" .. string.rep("─", math.max(0, shape.width - 1))
+    return lines, records
+  end
+
+  local function open_path(path, command)
+    if type(path) ~= "string" or path == "" then return false end
+    if type(command) == "string" and command ~= "" then
+      vim.system({ command, path }, { detach = true }, function(result)
+        if result.code ~= 0 then notify("Could not open output: " .. (result.stderr or "unknown error")) end
+      end)
+      return true
+    end
+    if vim.ui.open then
+      local ok = pcall(vim.ui.open, path)
+      return ok
+    end
+    local executable = vim.fn.has("mac") == 1 and "open" or (vim.fn.has("win32") == 1 and "start" or "xdg-open")
+    vim.system({ executable, path }, { detach = true })
+    return true
+  end
+
+  function M.image_popup(cell_id)
+    local cell = state.find_cell(cell_id)
+    if not cell then return false end
+    local path
+    for _, segment in ipairs(segments(cell)) do
+      if segment.kind == "image" and type(segment.path) == "string" and segment.path ~= "" then
+        path = segment.path
+        break
+      end
+    end
+    if not path then return false end
+    if state.options.image_provider == "image.nvim" then
+      return require("ipynb.image_viewer").open(path)
+    end
+    return open_path(path)
+  end
+
+  function M.open_browser(cell_id)
+    local cell = state.find_cell(cell_id)
+    return cell and open_path(cell.data.html, state.options.open_cmd) or false
+  end
+
+  function M.yank(cell_id, register)
+    local cell = state.find_cell(cell_id)
+    if not cell then return false end
+    local lines = cell.data.lines
+    if type(lines) ~= "table" then
+      lines = {}
+      for _, segment in ipairs(segments(cell)) do
+        if segment.kind ~= "image" then vim.list_extend(lines, text_lines(segment)) end
+      end
+    end
+    if #lines == 0 then return false end
+    vim.fn.setreg(register or '"', table.concat(lines, "\n"))
+    return true
+  end
+
+  return M
+end

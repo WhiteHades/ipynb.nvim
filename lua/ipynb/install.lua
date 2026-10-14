@@ -15,7 +15,6 @@ function M.run(root, options, install)
   if vim.fn.has("nvim-0.12") == 0 then error("Restart with Neovim 0.12 or newer before installing") end
   local command = { "bash", root .. "/scripts/prerequisites.sh", "--check" }
   if not options.images then table.insert(command, "--no-images") end
-  if options.backend == "python" then table.insert(command, "--python-backend") end
   local result = vim.system(command, { text = true }):wait()
   if result.code == 0 then return install() end
 

@@ -8,7 +8,6 @@ jupytext, nbformat, and the optional rich-output renderers.
 
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 import sys
@@ -17,22 +16,6 @@ from typing import Any
 import jupytext
 import nbformat
 from jupytext.combine import combine_inputs_with_outputs
-from jupyter_client.kernelspec import KernelSpecManager
-
-
-# Keep the manager alive with the converter process.  Discovery still runs for
-# every request so newly installed or removed kernels are visible immediately.
-_KERNEL_SPEC_MANAGER = KernelSpecManager()
-
-
-def _plain(value: Any) -> Any:
-    """Turn NotebookNode containers into JSON's ordinary containers."""
-
-    if isinstance(value, dict):
-        return {str(key): _plain(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(item) for item in value]
-    return value
 
 
 def _read(path: str) -> Any:
@@ -54,8 +37,8 @@ def _read_request(request: dict[str, Any]) -> dict[str, Any]:
         markdown = markdown[:-1]
     return {
         "text": markdown,
-        "metadata": _plain(notebook.metadata),
-        "notebook": _plain(notebook),
+        "metadata": notebook.metadata,
+        "notebook": notebook,
     }
 
 
@@ -73,21 +56,13 @@ def _convert_request(request: dict[str, Any]) -> Any:
         else:
             output_notebook = nbformat.reads(json.dumps(existing), as_version=4)
         source = combine_inputs_with_outputs(source, output_notebook, fmt="md:markdown")
-    return _plain(source)
+    return source
 
 
 def _text(value: Any) -> str:
     if isinstance(value, list):
         return "".join(str(item) for item in value)
     return str(value)
-
-
-def _image_bytes(value: Any) -> bytes:
-    if isinstance(value, list):
-        value = "".join(str(item) for item in value)
-    if isinstance(value, bytes):
-        return value
-    return base64.b64decode(str(value).encode("ascii"), validate=True)
 
 
 def _render_request(request: dict[str, Any]) -> dict[str, str]:
@@ -128,17 +103,7 @@ def _render_request(request: dict[str, Any]) -> dict[str, str]:
         pnglatex(_text(data), str(target))
         return {"path": str(target), "mime": "image/png"}
 
-    if mime.startswith("image/"):
-        target.write_bytes(_image_bytes(data))
-        return {"path": str(target), "mime": mime}
-
     raise ValueError(f"no native renderer for MIME type {mime!r}")
-
-
-def _kernelspecs_request() -> dict[str, str]:
-    """Return the current Jupyter kernelspec name-to-resource mapping."""
-
-    return _KERNEL_SPEC_MANAGER.find_kernel_specs()
 
 
 def _dispatch(request: Any) -> Any:
@@ -151,8 +116,6 @@ def _dispatch(request: Any) -> Any:
         return _convert_request(request)
     if operation == "render":
         return _render_request(request)
-    if operation == "kernelspecs":
-        return _kernelspecs_request()
     if operation == "shutdown":
         raise EOFError
     raise ValueError(f"unknown converter operation: {operation!r}")

@@ -4,7 +4,6 @@ set -eo pipefail
 
 mode=check
 images=1
-native=1
 yes=0
 rust_toolchain=1.88.0
 tree_version=0.26.10
@@ -13,13 +12,11 @@ for arg in "$@"; do
     --check) mode=check ;;
     --install) mode=install ;;
     --no-images) images=0 ;;
-    --python-backend) native=0 ;;
     --yes) yes=1 ;;
     -h|--help)
-      printf '%s\n' 'Usage: bash scripts/prerequisites.sh [--check|--install] [--no-images] [--python-backend] [--yes]' \
+      printf '%s\n' 'Usage: bash scripts/prerequisites.sh [--check|--install] [--no-images] [--yes]' \
         'Checks only by default. --install previews commands and asks before running them.' \
         '--yes accepts the install plan. Missing required tools produce exit status 1.' \
-        '--python-backend skips native engine build tools; tree-sitter may still need Rust to install.' \
         'uv manages Python. :IpynbInstall installs the Python helper and Rust engine.'
       exit 0 ;;
     *) printf 'Unknown option: %s\n' "$arg" >&2; exit 2 ;;
@@ -75,14 +72,12 @@ scan() {
   check_tool Neovim neovim nvim 'need 0.12.0+' 0 12 0
   check_tool uv uv uv 'need 0.13.1+' 0 13 1
   row INFO Python 'managed by uv; no system Python required'
-  if (( native )); then
-    # The locked ICU 2.3 dependencies require Rust 1.88.
-    check_tool Cargo cargo cargo 'need 1.88.0+' 1 88 0
-    check_tool Rust rust rustc 'need 1.88.0+' 1 88 0
-    check_tool pkg-config pkg-config pkg-config
-    if has c++ || has g++ || has clang++; then row OK 'C++ compiler' available
-    else missing+=(cxx); row NEED 'C++ compiler' 'not found'; fi
-  fi
+  # The locked ICU 2.3 dependencies require Rust 1.88.
+  check_tool Cargo cargo cargo 'need 1.88.0+' 1 88 0
+  check_tool Rust rust rustc 'need 1.88.0+' 1 88 0
+  check_tool pkg-config pkg-config pkg-config
+  if has c++ || has g++ || has clang++; then row OK 'C++ compiler' available
+  else missing+=(cxx); row NEED 'C++ compiler' 'not found'; fi
   check_tool Git git git
   check_tool curl curl curl
   check_tool tar tar tar

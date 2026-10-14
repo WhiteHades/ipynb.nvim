@@ -1,8 +1,2 @@
 ipykernel
-jupyter_client
 jupytext
-matplotlib
-nbformat
-numpy
-pillow
-pynvim

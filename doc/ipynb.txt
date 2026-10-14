@@ -13,7 +13,7 @@ tools open a terminal with an install plan and a confirmation prompt, including
 sudo when needed. A successful check continues installation. Headless Neovim
 stops with a shell command instead of waiting for input.
 
-The default build needs Neovim 0.12+, uv 0.13.1+, Rust/Cargo 1.88+, Git, curl,
+The build needs Neovim 0.12+, uv 0.13.1+, Rust/Cargo 1.88+, Git, curl,
 tar, pkg-config, a C/C++ compiler, and tree-sitter-cli 0.26.1+. Inline plots need
 ImageMagick's magick command and a compatible terminal, such as Kitty or Ghostty.
 The engine and parsers build from source; no prebuilt engine is installed.
@@ -28,9 +28,8 @@ To check host tools without installing them, run: >sh
 <
 Use --install to preview changes and ask before installing. --yes explicitly
 accepts the plan without a confirmation prompt; sudo may still need a password.
---no-images skips ImageMagick. --python-backend skips Rust engine build
-requirements, but parser tools are still needed. Installing tree-sitter-cli
-may still need Rust. Set backend="python" in setup options to use that backend.
+--no-images skips ImageMagick. Rust is the only execution backend;
+the old --python-backend flag is no longer supported.
 
 The helper supports apt, dnf, pacman, and Homebrew. Pacman also upgrades the
 system. Missing or old uv and Rust use the supported system facility or an
@@ -38,7 +37,7 @@ official upstream installer when packages are unavailable or too old. The Rust
 fallback can select Rust 1.88.0 as your default toolchain. User installers do
 not edit shell profiles. Put ~/.local/bin and ~/.cargo/bin on PATH before
 running uv or restarting Neovim.
-Restart after installation or a backend update. :checkhealth ipynb checks setup.
+Restart after installation or an engine update. :checkhealth ipynb checks setup.
 
 configuration                                              *ipynb-options*
 
@@ -81,7 +80,8 @@ files remain available. Local kernels start in the notebook's project directory.
 Completion and diagnostics use your existing Python language server. Pyright
 and basedpyright use the selected local Python, with separate project roots.
 kernel_python remains an optional LSP override; it does not select execution.
-Do not point python or python3_host_prog at every project's environment.
+Do not point python at every project's environment. The plugin does not use or
+change g:python3_host_prog, which belongs to other plugins.
 
 numpy_legacy_repr uses numpy's legacy="1.25" setting in new local python kernels.
 it changes display, not values or dtypes. external kernels keep their own setup.
@@ -90,13 +90,12 @@ previously saved outputs retain their original text until those cells run again.
 custom runtimes must provide requirements.txt themselves. the build step checks
 them and builds the Rust engine without changing their Python packages.
 With build=false, run :IpynbInstall after updates to rebuild the engine.
-An existing g:python3_host_prog is respected. Other environments can still be
-registered with ipykernel and chosen explicitly.
+Other environments can still be registered with ipykernel and chosen explicitly.
 
 without lazy.nvim, install the dependencies listed in lazy.lua with your package
-manager, put this plugin on runtimepath, call require('ipynb').init(opts) before
-python providers load, then require('ipynb').setup(opts). install the markdown,
-markdown_inline and python treesitter parsers and run :IpynbInstall.
+manager, put this plugin on runtimepath, then call require('ipynb').setup(opts).
+Install the markdown, markdown_inline and python treesitter parsers and run
+:IpynbInstall.
 
 the bundled runtime uses Ipynb commands and its own Lua namespace.
 it does not register or replace Molten commands from a separate installation.
@@ -118,13 +117,18 @@ rust backend                                                *ipynb-rust*
 :IpynbInstall builds native/target/release/ipynb-engine with Cargo. The engine
 uses Rust edition 2024. Python notebook cells still run in the selected Jupyter
 kernel; rewriting the coordinator does not accelerate their Python calculations.
-Jupytext/nbformat and optional rich-output renderers remain Python libraries.
+The small Python helper supplies Jupytext conversion and kernel discovery.
+requirements.txt lists only Jupytext and ipykernel, which install the required
+Jupyter and nbformat libraries. NumPy, Matplotlib, Pillow, pynvim, and jiter are
+not helper requirements. Install plotting packages in each notebook project's
+environment when its cells need them. Optional Plotly, Kaleido, pnglatex, and
+CairoSVG renderers need their own packages in the helper environment.
 
 The Rust engine starts only when a notebook needs it. Lua registers its commands
-directly, so :UpdateRemotePlugins is not needed for Rust. :checkhealth ipynb shows
-which backend is available. Set backend="python" in setup options to select the
-compatibility backend; it requires :UpdateRemotePlugins after installation.
-An installation without a built Rust engine also uses that compatibility path.
+directly, so :UpdateRemotePlugins is not needed. :checkhealth ipynb checks the
+engine and helper. If the engine is missing, notebook operations report an error
+and ask you to run :IpynbInstall. Setup and :IpynbInstall still work before the
+engine is built. No Python execution fallback is provided.
 Set binary="/path/to/ipynb-engine" to use a separately built executable.
 
 Kernels start on first execution by default. auto_init=true starts one on open.
@@ -132,10 +136,9 @@ If a kernel exits, saved and unsaved displayed results stay available. Running
 the next cell starts a replacement without rerunning earlier cells. :IpynbInfo
 shows the selected interpreter, working directory, and selection reason.
 
-The compatibility backend optionally uses requirements-rust.txt (jiter) for JSON
-reads. IPYNB_DISABLE_RUST=1 disables that decoder, not the Rust backend itself.
-It retains its previous registered-kernel selection and initialization behavior.
-Automatic project setup and opening without a kernel require the Rust backend.
+The Python execution backend and optional jiter decoder have been removed.
+Remove backend="python" from older configurations. backend="rust" is accepted
+for compatibility but is unnecessary. IPYNB_DISABLE_RUST no longer has an effect.
 
 keys                                                           *ipynb-keys*
 

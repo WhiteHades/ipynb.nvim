@@ -48,6 +48,13 @@ are ready, no prerequisite installation runs.
 
 New helper environments use Python 3.15.0 through uv, separate from project environments.
 The Rust engine and parsers build from source and need compiler tools.
+Rust is the only execution backend. The Python execution backend and optional
+jiter decoder have been removed. Existing `backend = "rust"` settings still work;
+remove `backend = "python"` from older configurations.
+The small Python helper still supplies Jupytext conversion and kernel discovery.
+Its direct requirements are `jupytext` and `ipykernel`, which install the required
+Jupyter and nbformat libraries. Plotting packages belong in each notebook project,
+not the editor's helper environment. Neovim's Python host is not used or changed.
 See [requirements and other setups](doc/install.md) for the standalone checker,
 supported package managers, and installation without a plugin manager.
 
@@ -84,13 +91,13 @@ reports the error without using global execution packages. Set
 `opts = { auto_setup = false }` to manage the environment yourself.
 The editor's helper Python stays separate from project dependencies.
 
-With the default Rust backend, opening a notebook restores saved results without
+Opening a notebook restores saved results without
 starting a kernel. The kernel starts when you first run code. `:IpynbInfo` shows
 its interpreter, working directory, and selection reason. Use `:IpynbInit` to
 choose another registered or shared kernel. Named, non-Python, and remote kernel
 choices remain available.
-Automatic project setup requires the default Rust backend. See
-`:help ipynb-options` for overrides.
+See `:help ipynb-options` for overrides. If the Rust engine is missing, notebook
+operations report an error with instructions to run `:IpynbInstall`.
 
 ## Help
 
@@ -98,16 +105,16 @@ Automatic project setup requires the default Rust backend. See
 - `:help ipynb` covers configuration, commands, and image controls.
 - [Installation details](doc/install.md), [releases](https://github.com/WhiteHades/ipynb.nvim/releases), and [issue reports](https://github.com/WhiteHades/ipynb.nvim/issues).
 
-Built on the customised Molten runtime and the Jupyter ecosystem.
+Built on the Molten interface and the Jupyter ecosystem, with a Rust engine.
 [Credits and provenance](CREDITS.md), [GPL-3.0](LICENSE).
 
 ## Testing
 
-The focused installer checks use isolated command substitutes and real headless
-Neovim, without installing system packages:
+Run the Rust checks, including installer checks that use isolated command
+substitutes and headless Neovim without installing system packages:
 
 ```sh
-cargo test --locked --manifest-path native/Cargo.toml --test installer --test editor_install
+cargo test --release --locked --manifest-path native/Cargo.toml
 ```
 
 `native/tests/project_workflow.rs` is an ignored Rust E2E test that uses installed

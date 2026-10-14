@@ -14,7 +14,6 @@ local function is_ipynb_otter_buffer(bufnr)
 end
 
 local function notebook_python_path(bufnr)
-  if not require("ipynb.native").active then return M.options.kernel_python or M.options.python end
   return require("ipynb.project").python(bufnr or 0, M.options)
 end
 
@@ -133,9 +132,7 @@ local function available_kernels()
 end
 
 local function default_kernel_name(bufnr)
-  local native = require("ipynb.native").active
-  local requested = not native and (M.options.kernel or vim.b[bufnr].ipynb_read_kernel or "python3") or nil
-  local selection = vim.b[bufnr].ipynb_kernel_selection or require("ipynb.project").resolve(bufnr, M.options, requested)
+  local selection = vim.b[bufnr].ipynb_kernel_selection or require("ipynb.project").resolve(bufnr, M.options)
   if selection.error then error(selection.error) end
   if selection.python then return selection end
   if selection.kernel and (selection.kernel:match("^https?://") or selection.kernel:match("%.json$")) then return selection end
@@ -165,9 +162,7 @@ local function ensure_notebook_kernel(bufnr)
   end
 
   local native = require("ipynb.native")
-  local running = native.active and native.running(bufnr) or vim.api.nvim_buf_call(bufnr, function()
-    return vim.fn.IpynbRunningKernels(true)
-  end)
+  local running = native.running(bufnr)
   if #running > 0 then return true end
   vim.b[bufnr].notebook_kernel_initialized = false
   local selected, selection = pcall(default_kernel_name, bufnr)
@@ -184,14 +179,7 @@ local function ensure_notebook_kernel(bufnr)
     return false
   end
 
-  local ok, err = pcall(vim.api.nvim_buf_call, bufnr, function()
-    if native.active then
-      native.initialize(bufnr, selection)
-    else
-      vim.cmd({ cmd = "IpynbInit", args = { selection.kernel } })
-      if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then vim.cmd("IpynbImportOutput") end
-    end
-  end)
+  local ok, err = pcall(native.initialize, bufnr, selection)
   if not ok then vim.notify(tostring(err), vim.log.levels.ERROR, { title = "notebook kernel" }); return false end
 
   if ok and #vim.fn.IpynbRunningKernels(true) > 0 then
@@ -257,7 +245,7 @@ local function set_notebook_keymaps(bufnr)
     return function(prepared)
       if vim.b[bufnr].ipynb_setup_pending then return end
       local native = require("ipynb.native")
-      local selection = native.active and (vim.b[bufnr].ipynb_kernel_selection or require("ipynb.project").resolve(bufnr, M.options)) or nil
+      local selection = vim.b[bufnr].ipynb_kernel_selection or require("ipynb.project").resolve(bufnr, M.options)
       if not prepared and selection and selection.kernel == "project" and #native.running(bufnr) == 0 then
         local tick, cursor = vim.api.nvim_buf_get_changedtick(bufnr), vim.api.nvim_win_get_cursor(0)
         vim.b[bufnr].ipynb_setup_pending = true
@@ -381,10 +369,13 @@ local function activate_notebook_buffer(bufnr)
 end
 
 function M.init(opts)
+  if opts and opts.backend ~= nil and opts.backend ~= "rust" then
+    error("The Python execution backend was removed. Remove opts.backend or set it to 'rust', then run :IpynbInstall.")
+  end
   require("ipynb.install").path()
   local venv = vim.fn.stdpath("data") .. "/ipynb.nvim/venv"
   M.options = vim.tbl_deep_extend("force", {
-    python = vim.g.python3_host_prog or venv .. "/bin/python",
+    python = venv .. "/bin/python",
     images = true,
     auto_init = false,
     auto_setup = true,
@@ -393,7 +384,6 @@ function M.init(opts)
     output = { preview_lines = 8 },
   }, opts or {})
   M.options.jupytext = M.options.jupytext or vim.fn.fnamemodify(M.options.python, ":h") .. "/jupytext"
-  vim.g.python3_host_prog = M.options.python
   vim.g.ipynb_numpy_legacy_repr = M.options.numpy_legacy_repr
   vim.g.ipynb_auto_init_behavior = "raise"
   vim.g.ipynb_auto_open_output = false
@@ -422,13 +412,12 @@ local function install_runtime()
     if result.code ~= 0 then error(result.stderr .. result.stdout) end
   else
     local result = vim.system({ M.options.python, "-c",
-      "import pynvim, jupyter_client, ipykernel, jupytext, nbformat, numpy, matplotlib, PIL",
+      "import ipykernel, jupytext",
     }, { text = true }):wait()
     if result.code ~= 0 then
       error("custom python runtime needs requirements.txt installed first: " .. (result.stderr or ""))
     end
   end
-  vim.g.python3_host_prog = M.options.python
   local treesitter = require("nvim-treesitter")
   if treesitter.install then
     treesitter.install({ "markdown", "markdown_inline", "python" }):wait(300000)
@@ -443,14 +432,9 @@ local function install_runtime()
       error("Notebook parser installation failed for " .. language .. ": " .. tostring(err or loaded))
     end
   end
-  if M.options.backend == "python" then
-    vim.cmd("runtime! plugin/rplugin.vim")
-    vim.cmd("UpdateRemotePlugins")
-  else
-    local result = vim.system({ "cargo", "build", "--release", "--locked" },
-      { cwd = root .. "/native", text = true }):wait()
-    if result.code ~= 0 then error("Rust engine build failed: " .. (result.stderr or result.stdout)) end
-  end
+  local result = vim.system({ "cargo", "build", "--release", "--locked" },
+    { cwd = root .. "/native", text = true }):wait()
+  if result.code ~= 0 then error("Rust engine build failed: " .. (result.stderr or result.stdout)) end
   vim.notify("notebook runtime installed. restart neovim before opening notebooks.")
 end
 
@@ -473,8 +457,7 @@ function M.setup(opts)
     update = true,
     async_write = false,
   })
-  local native = require("ipynb.native").setup(M.options)
-  if not native and (opts or {}).auto_init == nil then M.options.auto_init = true end
+  require("ipynb.native").setup(M.options)
   require("ipynb.notebook_io").setup(require("jupytext"))
   local group = vim.api.nvim_create_augroup("ipynb", { clear = true })
   local function autocmd(events, callback)

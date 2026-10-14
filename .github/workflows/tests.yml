@@ -3,7 +3,7 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  python:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -17,10 +17,5 @@ jobs:
           tar -xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
       - run: python -m pip install -r requirements.txt
-      - run: python -m unittest discover -s tests -v
-        env:
-          PYTHONPATH: rplugin/python3
       - run: rustup update stable --no-self-update
       - run: cargo +stable test --release --locked --manifest-path native/Cargo.toml
-      - run: cargo +stable build --release --locked --manifest-path native/Cargo.toml
-      - run: python tests/native.py

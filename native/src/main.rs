@@ -1,5 +1,6 @@
 mod engine;
 mod kernel;
+mod kernelspec;
 mod notebook;
 
 use anyhow::{Context, Result};
