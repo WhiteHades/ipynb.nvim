@@ -84,7 +84,7 @@ fn runtime_outputs_survive_errors_and_stream_views_stay_current() {
         let spec = directory.path().join("kernel.json");
         std::fs::write(
             &spec,
-            json!({"argv":["/bin/true"],"language":"r"}).to_string(),
+            json!({"argv":["/usr/bin/true"],"language":"r"}).to_string(),
         )
         .unwrap();
         let mut engine = runtime_engine();
@@ -175,7 +175,7 @@ fn runtime_outputs_survive_errors_and_stream_views_stay_current() {
             .dispatch(
                 "init",
                 &json!({"buf":1,"kernel":"project",
-        "python":"/bin/true","replace":"test"}),
+        "python":"/usr/bin/true","replace":"test"}),
             )
             .unwrap();
         let replacement = replacement.as_str().unwrap();
@@ -200,7 +200,7 @@ fn runtime_outputs_survive_errors_and_stream_views_stay_current() {
             .dispatch(
                 "init",
                 &json!({"buf":1,"kernel":"project",
-        "python":"/bin/true","replace":replacement}),
+        "python":"/usr/bin/true","replace":replacement}),
             )
             .unwrap();
         assert_eq!(engine.attached[&2], [replacement]);
@@ -368,6 +368,231 @@ fn save_directory() -> Result<tempfile::TempDir> {
         .tempdir_in(root)?)
 }
 
+#[test]
+fn jupytext_config_pair_sync_and_export_keep_outputs_and_reject_conflicts() -> Result<()> {
+    let directory = save_directory()?;
+    let path = directory.path().join("paired.ipynb");
+    let script = directory.path().join("paired.py");
+    std::fs::write(
+        directory.path().join("jupytext.toml"),
+        "formats = 'ipynb,py:percent'\ncell_metadata_filter = 'all'\n",
+    )?;
+    let mut engine = save_engine()?;
+    let (buffer, mtime) = save_duplicate_fixture(&mut engine, &path)?;
+    let read = engine.read(&json!({"path":path}))?;
+    assert!(text(&read["text"]).contains("custom="));
+    let mut params = json!({"path":path,"buf":1,"text":buffer,"mtime":mtime});
+    let saved = engine.write(&params)?;
+    assert!(std::fs::read_to_string(&script)?.contains("# %%"));
+    assert_eq!(
+        text(&notebook::read_json(&path)?["cells"][2]["outputs"][0]["text"]),
+        "new\n"
+    );
+    params["mtime"] = saved["mtime"].clone();
+
+    let compared = engine.converter.read(&path, Path::new(""))?;
+    let original = std::fs::read(&path)?;
+    let external =
+        std::fs::read_to_string(&script)? + "\n# %% [markdown]\n# Edited outside Neovim\n";
+    std::fs::write(&script, &external)?;
+    assert!(
+        engine
+            .remember_pairs(&path, &compared)
+            .unwrap_err()
+            .to_string()
+            .contains("changed on disk")
+    );
+    let error = engine.write(&params).unwrap_err();
+    assert!(
+        error.to_string().contains("Paired files changed"),
+        "{error:#}"
+    );
+    assert_eq!(std::fs::read(&path)?, original);
+    assert_eq!(std::fs::read_to_string(&script)?, external);
+    params["action"] = json!("sync");
+    params["source"] = json!(script);
+    let synced = engine.jupytext(&params)?;
+    assert!(text(&synced["text"]).contains("Edited outside Neovim"));
+    let notebook = notebook::read_json(&path)?;
+    assert_eq!(notebook["metadata"]["custom"], "keep");
+    assert_eq!(notebook["cells"][0]["id"], "prose");
+    assert!(notebook["cells"][0]["attachments"]["tiny.png"].is_object());
+    assert_eq!(text(&notebook["cells"][2]["outputs"][0]["text"]), "new\n");
+    params["text"] = synced["text"].clone();
+    params["mtime"] = synced["mtime"].clone();
+
+    let compatible = std::fs::read_to_string(&script)?;
+    let incompatible = compatible
+        .lines()
+        .map(|line| {
+            if line.contains("format_version:") {
+                "#       format_version: '99.0'"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(compatible.trim_end(), incompatible.trim_end());
+    std::fs::write(&script, &incompatible)?;
+    let before_sync = std::fs::read(&path)?;
+    assert!(
+        engine
+            .jupytext(&params)
+            .unwrap_err()
+            .to_string()
+            .contains("JupytextFormatError")
+    );
+    assert_eq!(std::fs::read(&path)?, before_sync);
+    assert_eq!(std::fs::read_to_string(&script)?, incompatible);
+    std::fs::write(&script, compatible)?;
+    let restored = engine.jupytext(&params)?;
+    params["text"] = restored["text"].clone();
+    params["mtime"] = restored["mtime"].clone();
+
+    params["action"] = json!("info");
+    let info = engine.jupytext(&params)?;
+    assert!(
+        info["formats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["format"] == "md:myst")
+    );
+    assert!(info["config"].as_str().unwrap().ends_with("jupytext.toml"));
+    let target = directory.path().join("export.md");
+    params["action"] = json!("export");
+    params["fmt"] = json!("md:markdown");
+    params["target"] = json!(target);
+    engine.jupytext(&params)?;
+    let exported = std::fs::read(&target)?;
+    assert!(engine.jupytext(&params).is_err());
+    assert_eq!(std::fs::read(&target)?, exported);
+
+    params["action"] = json!("check");
+    params["command"] = json!("true");
+    engine.jupytext(&params)?;
+    params["action"] = json!("pipe");
+    params["command"] = json!("cat");
+    let proposed = engine.jupytext(&params)?;
+    assert!(text(&proposed["text"]).contains("Edited outside Neovim"));
+    assert!(proposed["writes"].as_array().unwrap().is_empty());
+    params["command"] = json!("false");
+    assert!(engine.jupytext(&params).is_err());
+
+    params["action"] = json!("unpair");
+    let unpaired = engine.jupytext(&params)?;
+    assert_eq!(
+        notebook::read_json(&path)?["metadata"]["jupytext"]["formats"],
+        "ipynb"
+    );
+    assert!(script.is_file());
+    assert!(unpaired["mtime"].is_object());
+    let fresh_path = directory.path().join("new.ipynb");
+    let fresh = engine.read(&json!({"path":fresh_path,
+        "template":Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("data/template.ipynb")}))?;
+    engine.write(&json!({"path":fresh_path,"buf":2,"text":fresh["text"],"mtime":null}))?;
+    assert!(fresh_path.with_extension("py").is_file());
+    let reopened = engine.read(&json!({"path":fresh_path}))?;
+    assert_eq!(reopened["paired_changed"], json!([]));
+    std::fs::remove_file(directory.path().join("jupytext.toml"))?;
+    let marker = directory.path().join("executed");
+    std::fs::write(
+        directory.path().join(".jupytext.py"),
+        format!("open({:?}, 'w').write('unsafe')", marker),
+    )?;
+    assert!(
+        engine
+            .read(&json!({"path":path}))
+            .unwrap_err()
+            .to_string()
+            .contains("Executable Jupytext config")
+    );
+    assert!(!marker.exists());
+    Ok(())
+}
+
+#[test]
+fn output_export_rejects_external_inputs_even_when_the_mtime_is_preserved() -> Result<()> {
+    let directory = save_directory()?;
+    let path = directory.path().join("external.ipynb");
+    let mut engine = save_engine()?;
+    let (buffer, mtime) = save_duplicate_fixture(&mut engine, &path)?;
+    engine.read(&json!({"path":path}))?;
+    let modified = std::fs::metadata(&path)?.modified()?;
+    let external = std::fs::read_to_string(&path)?.replacen("print(1)", "print(9)", 1);
+    std::fs::write(&path, &external)?;
+    std::fs::File::options()
+        .write(true)
+        .open(&path)?
+        .set_times(std::fs::FileTimes::new().set_modified(modified))?;
+    assert_eq!(
+        notebook::file_mtime(&path)?,
+        Some(serde_json::from_value(mtime.clone())?)
+    );
+    let params = json!({"path":path,"buf":1,"overwrite":true,"mtime":mtime,
+        "lines":buffer.split('\n').collect::<Vec<_>>()});
+    assert!(
+        engine
+            .export(&params)
+            .unwrap_err()
+            .to_string()
+            .contains("changed on disk")
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, external);
+    assert!(
+        engine
+            .write(&json!({"path":path,"buf":1,"text":buffer,"mtime":mtime}))
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, external);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn opening_optional_pairs_does_not_run_external_converters() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = save_directory()?;
+    let bin = directory.path().join("bin");
+    std::fs::create_dir(&bin)?;
+    let marker = directory.path().join("external-ran");
+    let executable = bin.join("quarto");
+    std::fs::write(
+        &executable,
+        format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
+    )?;
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
+    let wrapper = directory.path().join("python");
+    let python = std::env::var("IPYNB_TEST_PYTHON").unwrap_or_else(|_| "python3".into());
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexport PATH='{}':\"$PATH\"\nexec '{}' \"$@\"\n",
+            bin.display(),
+            python.replace('\'', "'\\''")
+        ),
+    )?;
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700))?;
+    let path = directory.path().join("optional.ipynb");
+    notebook::write_atomic(
+        &path,
+        &json!({"nbformat":4,"nbformat_minor":5,"cells":[],
+        "metadata":{"jupytext":{"formats":"ipynb,qmd"}}}),
+        None,
+    )?;
+    let paired = path.with_extension("qmd");
+    std::fs::write(&paired, "---\ntitle: Notebook\n---\n")?;
+    let mut engine = Engine::new(
+        wrapper.to_string_lossy().into_owned(),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("converter.py"),
+    )?;
+    let read = engine.read(&json!({"path":path}))?;
+    assert_eq!(read["paired_changed"], json!([paired]));
+    assert!(!marker.exists());
+    Ok(())
+}
+
 fn save_duplicate_fixture(engine: &mut Engine, path: &Path) -> Result<(String, Value)> {
     let original = json!({"nbformat":4,"nbformat_minor":5,"metadata":{"custom":"keep"},
     "cells":[
@@ -461,11 +686,11 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         "first = 1 # live":"first = 1\n","first = 1 # disk":"first = 1\n"}});
         let disk = notebook.clone();
         let comparison = engine
-            .merge_outputs(&mut notebook, 1, None, &json!({}), Some(buffer))
+            .merge_outputs(&mut notebook, 1, None, &json!({}), Some(buffer), None)
             .unwrap_err();
         assert!(comparison.downcast_ref::<SourceComparison>().is_some());
         assert_eq!(notebook, disk);
-        assert!(engine.merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer))?);
+        assert!(engine.merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer), None)?);
         for (index, count) in [(0, 3), (1, 1), (2, 2)] {
             assert_eq!(notebook["cells"][index]["execution_count"], count);
             assert_eq!(
@@ -500,7 +725,7 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         {"cell_type":"code","source":"print(1)","outputs":[],"execution_count":2}]});
         let original = notebook.clone();
         let error = engine
-            .merge_outputs(&mut notebook, 1, None, &json!({}), None)
+            .merge_outputs(&mut notebook, 1, None, &json!({}), None, None)
             .unwrap_err();
         assert!(error.to_string().contains("Ambiguous"));
         assert_eq!(notebook, original);
@@ -509,7 +734,7 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         engine.cells[0].source = "print(1) # new".into();
         let normalized = json!({"python":{"print(1)":"print(1)\n","print(1) # new":"print(1)\n"}});
         let error = engine
-            .merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer))
+            .merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer), None)
             .unwrap_err();
         assert!(error.to_string().contains("Ambiguous"));
         assert_eq!(notebook, original);
@@ -530,7 +755,7 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         {"cell_type":"code","source":"print(1)","outputs":[],"execution_count":1}]});
         let unchanged = prose_only.clone();
         let error = engine
-            .merge_outputs(&mut prose_only, 1, None, &json!({}), Some("print(1)"))
+            .merge_outputs(&mut prose_only, 1, None, &json!({}), Some("print(1)"), None)
             .unwrap_err();
         assert!(
             error
@@ -598,7 +823,7 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         engine.cells[0].count = json!(9);
         let normalized = json!({"python":{"value = 1 # first":"value = 1\n",
         "value = 1 # second":"value = 1\n"}});
-        assert!(engine.merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer))?);
+        assert!(engine.merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer), None)?);
         assert_eq!(notebook["cells"][0]["execution_count"], 9);
         assert_eq!(notebook["cells"][1]["execution_count"], 2);
     }

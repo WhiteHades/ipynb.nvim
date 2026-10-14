@@ -41,13 +41,23 @@ impl Engine {
             .converter
             .read(path, Path::new(params["template"].as_str().unwrap_or("")))?;
         let after = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if before != after {
+            bail!("Notebook changed on disk while it was opened");
+        }
+        self.remember_pairs(path, &result)?;
         self.read_cache = before
             .filter(|_| before == after)
             .map(|mtime| (path.to_owned(), mtime, result["notebook"].take()));
-        Ok(json!({"text":result["text"], "metadata":result["metadata"]}))
+        Ok(
+            json!({"text":result["text"], "metadata":result["metadata"], "paired_changed":result["divergent"]}),
+        )
     }
 
     pub(super) fn write(&mut self, params: &Value) -> Result<Value> {
+        self.write_pairs(params)
+    }
+
+    pub(super) fn current_notebook(&mut self, params: &Value) -> Result<Value> {
         let path = Self::path(params)?;
         let existing = if path.is_file() && std::fs::metadata(path)?.len() > 0 {
             Some(notebook::read_json(path)?)
@@ -72,7 +82,7 @@ impl Engine {
             })
             .collect();
         let buffer = text(&params["text"]);
-        let mut notebook = self.converter.convert(&buffer, existing)?;
+        let mut notebook = self.converter.convert_at(&buffer, existing, Some(path))?;
         self.preserve_cell_identity(
             &mut notebook,
             &identities,
@@ -85,17 +95,18 @@ impl Engine {
             None,
             &params["normalized"],
             Some(&buffer),
+            Some(path),
         )?;
-        notebook::split_lines(&mut notebook);
-        notebook::write_atomic(
-            path,
-            &notebook,
-            params.get("mtime").filter(|v| !v.is_null()),
-        )
+        Ok(notebook)
     }
 
-    pub(super) fn export(&mut self, params: &Value) -> Result<()> {
+    pub(super) fn export(&mut self, params: &Value) -> Result<Value> {
         let path = Self::path(params)?;
+        let overwrite = params["overwrite"].as_bool().unwrap_or(true);
+        if overwrite {
+            notebook::check_expected_mtime(path, params.get("mtime"))?;
+            self.check_pair_file(path)?;
+        }
         let before = notebook::file_mtime(path)?.context("Notebook file is missing")?;
         let mut notebook = self.read_compatible_notebook(path)?;
         if notebook::file_mtime(path)? != Some(before) {
@@ -107,7 +118,7 @@ impl Engine {
             .iter()
             .any(|cell| cell.buf == params["buf"].as_u64().unwrap_or(0) && cell.kernel == kernel)
         {
-            return Ok(());
+            return Ok(json!({"mtime":before}));
         }
         let buffer = params["lines"]
             .as_array()
@@ -118,8 +129,8 @@ impl Engine {
             Some(&kernel),
             &params["normalized"],
             buffer.as_deref(),
+            Some(path),
         )?;
-        let overwrite = params["overwrite"].as_bool().unwrap_or(true);
         if changed || !overwrite {
             let dest = if overwrite {
                 path.to_owned()
@@ -131,25 +142,40 @@ impl Engine {
             };
             notebook::split_lines(&mut notebook);
             let expected = json!(before);
-            notebook::write_atomic(&dest, &notebook, overwrite.then_some(&expected))?;
+            if overwrite {
+                self.check_pair_file(path)?;
+            }
+            let result = notebook::write_atomic(&dest, &notebook, overwrite.then_some(&expected))?;
+            if overwrite {
+                self.refresh_pair_file(path, &result)?;
+            }
+            return Ok(result);
         }
-        Ok(())
+        Ok(json!({"mtime":before}))
     }
 
-    pub(super) fn import(&mut self, params: &Value) -> Result<()> {
+    pub(super) fn import(&mut self, params: &Value) -> Result<Vec<Value>> {
         let path = Self::path(params)?;
-        let notebook = match self.read_cache.take() {
-            Some((cached_path, modified, notebook))
-                if cached_path == path
-                    && std::fs::metadata(path).and_then(|m| m.modified()).ok()
-                        == Some(modified) =>
-            {
-                notebook
+        let notebook = if params["notebook"].is_object() {
+            params["notebook"].clone()
+        } else {
+            match self.read_cache.take() {
+                Some((cached_path, modified, notebook))
+                    if cached_path == path
+                        && std::fs::metadata(path).and_then(|m| m.modified()).ok()
+                            == Some(modified) =>
+                {
+                    notebook
+                }
+                _ => self.read_compatible_notebook(path)?,
             }
-            _ => self.read_compatible_notebook(path)?,
         };
         let buf = params["buf"].as_u64().unwrap_or(0);
-        let kernel = if self.attached.get(&buf).is_some_and(|ids| !ids.is_empty()) {
+        let kernel = if self
+            .attached
+            .get(&buf)
+            .is_some_and(|ids| !ids.is_empty() && (params["preview"] != true || ids.len() == 1))
+        {
             self.selected_kernel(params)?
         } else {
             let id = format!("saved:{buf}");
@@ -175,12 +201,24 @@ impl Engine {
                 .enumerate()
                 .map(|(index, span)| (index as u64, point(&span["begin"])))
                 .collect();
-            positioned_sources(&mut self.converter, &lines.join("\n"), &starts)?
+            positioned_sources(&mut self.converter, &lines.join("\n"), &starts, Some(path))?
         } else {
             (Vec::new(), HashMap::new())
         };
         let mut offset = 0;
         let mut ordinal = 0;
+        if params["reset"] == true {
+            if self
+                .cells
+                .iter()
+                .any(|cell| cell.buf == buf && matches!(cell.status, "running" | "hold"))
+            {
+                bail!("Wait for execution to finish before replacing output previews");
+            }
+            self.cells.retain(|cell| cell.buf != buf);
+            self.prune_requests();
+            self.read_cache = None;
+        }
         for nb in notebook["cells"]
             .as_array()
             .context("Notebook cells missing")?
@@ -232,6 +270,12 @@ impl Engine {
             cell.success = !cell.outputs.iter().any(|o| o["output_type"] == "error");
         }
         self.dirty.insert(buf);
-        Ok(())
+        Ok(spans
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(index, _)| positions.contains_key(&(*index as u64)))
+            .map(|(_, span)| span.clone())
+            .collect())
     }
 }

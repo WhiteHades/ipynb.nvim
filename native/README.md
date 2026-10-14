@@ -1,10 +1,33 @@
-# Engine
+# Testing
 
-`engine/` owns cells, outputs, and notebook state. `kernel/` owns local processes,
-signed messages, remote connections, and worker cleanup.
-`notebook.rs` owns atomic JSON saves, and `kernelspec.rs` finds installed kernels.
+From the repository root, run:
 
-The converter starts on demand for Jupytext conversion and optional renderers.
-Lua handles Neovim windows, mappings, and buffer events.
+```sh
+IPYNB_TEST_PYTHON=/path/to/helper/bin/python \
+  cargo test --release --locked --manifest-path native/Cargo.toml
+```
 
-Run core checks with `IPYNB_TEST_PYTHON=/path/to/helper/bin/python cargo test --release --locked`.
+## Editor check
+
+Set the following variables to check the editor with installed plugins.
+
+```text
+IPYNB_TEST_PLUGINS   Installed Neovim plugin directory
+IPYNB_PYRIGHT        Pyright executable
+IPYNB_TEST_PYTHON    Helper Python
+IPYNB_PROJECT_PYTHON Another environment's Python
+IPYNB_TEST_SITE      Parser runtime directory, if stored elsewhere
+```
+
+Both Python environments need `ipykernel`. Build and run from the repository root:
+
+```sh
+cargo build --release --locked --manifest-path native/Cargo.toml
+cargo test --manifest-path native/Cargo.toml --test notebook_view --test project_workflow -- --ignored
+```
+
+With ImageMagick 7, also check plot scaling and transparent corners:
+
+```sh
+cargo test --manifest-path native/Cargo.toml --test image_kitty -- --include-ignored
+```

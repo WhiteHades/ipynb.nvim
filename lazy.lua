@@ -23,11 +23,28 @@ return {
       { "3rd/image.nvim", opts = { processor = "magick_cli", scale_factor = 2.0,
         max_width_window_percentage = 95, max_height_window_percentage = 85,
         window_overlap_clear_enabled = false,
+        editor_only_render_when_focused = true, tmux_show_only_in_active_window = true,
         integrations = { markdown = { only_render_image_at_cursor = false,
           only_render_image_at_cursor_mode = "inline", floating_windows = true } },
       } },
     },
   },
+  { "MeanderingProgrammer/render-markdown.nvim", optional = true, opts = function(_, opts)
+    require("ipynb.markdown_integration").setup(opts)
+  end },
+  { "saghen/blink.cmp", optional = true, opts = function()
+    vim.api.nvim_create_autocmd("User", {
+      group = vim.api.nvim_create_augroup("IpynbCompletion", { clear = true }),
+      pattern = "BlinkCmpMenuOpen",
+      callback = function()
+        local menu = require("blink.cmp.completion.windows.menu")
+        local buf = menu.context and menu.context.bufnr
+        if not buf or not vim.api.nvim_buf_is_valid(buf) or not vim.api.nvim_buf_get_name(buf):match("%.ipynb$") then return end
+        -- Blink's delayed auto-show can run after InsertLeave has hidden its context.
+        if vim.api.nvim_get_current_buf() ~= buf or not vim.api.nvim_get_mode().mode:match("^[ic]") then menu.close() end
+      end,
+    })
+  end },
   { "lewis6991/gitsigns.nvim", optional = true, opts = function(_, opts)
     local previous = opts.on_attach
     opts.on_attach = function(buf)

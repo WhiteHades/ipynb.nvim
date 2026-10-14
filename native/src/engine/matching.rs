@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
 
 use super::{Cell, Engine, SourceComparison, text};
 use crate::notebook::{self, Converter};
@@ -44,6 +45,7 @@ pub(super) fn positioned_sources(
     converter: &mut Converter,
     buffer: &str,
     starts: &[(u64, [usize; 2])],
+    path: Option<&Path>,
 ) -> Result<(Vec<String>, HashMap<u64, usize>)> {
     let nonce = uuid::Uuid::new_v4().simple().to_string();
     let mut marked = buffer.to_owned();
@@ -68,7 +70,7 @@ pub(super) fn positioned_sources(
         marked.insert_str(*offset, marker);
     }
     // Let Jupytext locate the spans; source searches also match prose and duplicate cells.
-    let converted = converter.convert(&marked, None)?;
+    let converted = converter.convert_at(&marked, None, path)?;
     let mut sources = Vec::new();
     let mut positions = HashMap::new();
     for cell in converted["cells"]
@@ -100,6 +102,7 @@ impl Engine {
         kernel: Option<&str>,
         normalized: &Value,
         buffer: Option<&str>,
+        path: Option<&Path>,
     ) -> Result<bool> {
         let mut cells: Vec<_> = self
             .cells
@@ -121,6 +124,7 @@ impl Engine {
                     .iter()
                     .map(|cell| (cell.id, cell.begin))
                     .collect::<Vec<_>>(),
+                path,
             )?,
             None => (Vec::new(), HashMap::new()),
         };

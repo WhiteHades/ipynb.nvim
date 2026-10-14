@@ -87,9 +87,8 @@ assert(vim.g.rpc_read_calls == 1 and vim.g.rpc_write_calls == 2)
 
 settings.format = "md:markdown"
 vim.cmd("delfunction IpynbNotebookRead")
-assert(jupytext.open_notebook("old-manifest.ipynb", buffer) == "original-read")
-assert(jupytext.write_notebook("old-manifest.ipynb", {}, buffer) == "original-write")
-assert(original_reads == 2 and original_writes == 2)
+assert(not pcall(jupytext.open_notebook, "missing-engine.ipynb", buffer))
+assert(original_reads == 1, "a missing engine must not silently use another converter")
 
 -- Remote functions exist only as FuncUndefined handlers until their first call.
 vim.api.nvim_create_autocmd("FuncUndefined", {
@@ -106,7 +105,7 @@ vim.api.nvim_create_autocmd("FuncUndefined", {
 assert(vim.fn.exists("*IpynbNotebookRead") == 0)
 assert(jupytext.open_notebook("lazy.ipynb", buffer).lazy == 1)
 assert(vim.b[buffer].ipynb_read_kernel == false)
-assert(original_reads == 2)
+assert(original_reads == 1)
 
 vim.fn.delete(path)
 print("pass: notebook IO success, failure, and fallback behavior")

@@ -153,6 +153,17 @@ local function source_window(buf)
   return wins and wins[1] or nil
 end
 
+local function contains_cursor(buf, position, first, last)
+  if position_at_or_before(first, position) and position_before(position, last) then return true end
+  local row = position.line
+  if row == first.line - 1 or row == last.line + 1 then
+    local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
+    return (row == first.line - 1 and line:match("^```%s*[%w_+-]+") ~= nil)
+      or (row == last.line + 1 and line:match("^```%s*$") ~= nil)
+  end
+  return false
+end
+
 -- Own notebook state and configuration; private renderers share this table.
 local view = {
   buffers = buffers,
@@ -179,19 +190,8 @@ local function destroy_cell(cell)
   end
 end
 
-local function highlight(cell)
-  local begin_pos, end_pos = current_positions(cell)
-  if not begin_pos or not end_pos or not position_before(begin_pos, end_pos) then return end
-  pcall(vim.api.nvim_buf_set_extmark, cell.buf, highlight_ns, begin_pos.line, begin_pos.col, {
-    end_row = end_pos.line,
-    end_col = end_pos.col,
-    hl_group = "IpynbCell",
-    hl_eol = true,
-    strict = false,
-  })
-end
-
 local function refresh(buf, force)
+  if view.shutting_down then return end
   local state = buffers[buf]
   if not state or not valid_buf(buf) then return end
   pcall(vim.api.nvim_buf_clear_namespace, buf, highlight_ns, 0, -1)
@@ -202,8 +202,7 @@ local function refresh(buf, force)
     local position = { line = cursor[1] - 1, col = cursor[2] }
     for _, cell in ipairs(state.order) do
       local begin_pos, end_pos = current_positions(cell)
-      if begin_pos and end_pos and position_at_or_before(begin_pos, position)
-        and position_before(position, end_pos) then
+      if begin_pos and end_pos and contains_cursor(buf, position, begin_pos, end_pos) then
         selected = cell
         break
       end
@@ -216,14 +215,15 @@ local function refresh(buf, force)
     if not state.selected_id and selected and view.options.auto_open_output then output.render_float(selected, false) end
     state.selected_id = selected_id
   end
-  if selected then highlight(selected) end
   for _, cell in ipairs(state.order) do
     output.show_virtual(cell, force)
     if cell.ui.float and valid_win(cell.ui.float.win) then output.render_float(cell, false) end
   end
+  require("ipynb.cell_header").refresh(buf)
 end
 
 function M.configure(opts)
+  view.shutting_down = false
   opts = type(opts) == "table" and vim.deepcopy(opts) or {}
   if type(opts.output) == "table" then
     opts.output_win_max_height = opts.output_win_max_height or opts.output.height
@@ -241,6 +241,7 @@ function M.configure(opts)
 end
 
 function M.sync(buf, cells)
+  if view.shutting_down then return false end
   buf = number(buf, vim.api.nvim_get_current_buf())
   if not valid_buf(buf) or type(cells) ~= "table" then return false end
   local state = buffers[buf] or { by_id = {}, order = {}, selected_id = nil }
@@ -341,6 +342,26 @@ function M.cells(buf)
   return result
 end
 
+function M.cell_headers(buf)
+  local result, by_row = {}, {}
+  for _, cell in ipairs(buffers[buf] and buffers[buf].order or {}) do
+    local first = current_positions(cell)
+    if first then
+      result[#result + 1] = { row = first.line - 1, execution_count = cell.data.execution_count,
+        status = cell.data.status, success = cell.data.success, old = cell.data.old, group = rich.border_group(cell) }
+      by_row[first.line - 1] = result[#result]
+    end
+  end
+  if vim.b[buf].ipynb_code_spans_tick == vim.api.nvim_buf_get_changedtick(buf) then
+    result = {}
+    for _, span in ipairs(vim.b[buf].ipynb_code_spans) do
+      local row = span.begin[1] - 1
+      result[#result + 1] = by_row[row] or { row = row, status = "new", group = "IpyNotebookCodeLabel" }
+    end
+  end
+  return result
+end
+
 function M.current(buf, row, col)
   buf = number(buf, vim.api.nvim_get_current_buf())
   local state = buffers[buf]
@@ -356,7 +377,7 @@ function M.current(buf, row, col)
   local position = { line = row, col = col }
   for _, cell in ipairs(state.order) do
     local begin_pos, end_pos = current_positions(cell)
-    if begin_pos and end_pos and position_at_or_before(begin_pos, position) and position_before(position, end_pos) then
+    if begin_pos and end_pos and contains_cursor(buf, position, begin_pos, end_pos) then
       return public_cell(cell)
     end
   end
@@ -366,6 +387,7 @@ function M.clear(buf)
   buf = number(buf, vim.api.nvim_get_current_buf())
   local state = buffers[buf]
   if not state then return false end
+  require("ipynb.cell_header").clear(buf)
   for _, cell in ipairs(state.order) do destroy_cell(cell) end
   if valid_buf(buf) then
     pcall(vim.api.nvim_buf_clear_namespace, buf, position_ns, 0, -1)
@@ -377,7 +399,14 @@ function M.clear(buf)
   return true
 end
 
+function M.shutdown()
+  if view.shutting_down then return end
+  rich.shutdown()
+  for buf in pairs(buffers) do M.clear(buf) end
+end
+
 function M.refresh(buf)
+  if view.shutting_down then return end
   buf = number(buf, vim.api.nvim_get_current_buf())
   if buffers[buf] then
     refresh(buf, false)

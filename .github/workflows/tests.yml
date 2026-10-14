@@ -103,3 +103,8 @@ jobs:
           test -x "$GITHUB_WORKSPACE/native/target/release/ipynb-engine"
           echo "IPYNB_TEST_PYTHON=$XDG_DATA_HOME/nvim/ipynb.nvim/venv/bin/python" >> "$GITHUB_ENV"
       - run: cargo +stable test --release --locked --manifest-path native/Cargo.toml
+      - name: Notebook rendering and cell controls
+        env:
+          IPYNB_TEST_PLUGINS: ${{ runner.temp }}/ipynb/data/nvim/lazy
+          IPYNB_TEST_SITE: ${{ runner.temp }}/ipynb/data/nvim/site
+        run: cargo +stable test --release --locked --manifest-path native/Cargo.toml --test notebook_view -- --ignored

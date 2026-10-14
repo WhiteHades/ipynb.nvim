@@ -63,9 +63,9 @@ def install_requirements(venv: Path, requirements: Path) -> Path:
     interpreter = python_path(venv)
     uv = shutil.which("uv")
     if uv:
-        run([uv, "pip", "install", "--python", str(interpreter), "-r", str(requirements)])
+        run([uv, "pip", "install", "--upgrade", "--python", str(interpreter), "-r", str(requirements)])
     else:
-        run([str(interpreter), "-m", "pip", "install", "-r", str(requirements)])
+        run([str(interpreter), "-m", "pip", "install", "--upgrade", "-r", str(requirements)])
     return interpreter
 
 

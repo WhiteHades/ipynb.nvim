@@ -16,6 +16,25 @@ function M.spans(bufnr)
   return result
 end
 
+function M.executable(bufnr, force)
+  local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+  if force or vim.b[bufnr].ipynb_code_spans_tick ~= tick then
+    local read = vim.b[bufnr].ipynb_code_spans_read
+    vim.b[bufnr].ipynb_code_spans_read = nil
+    -- BufReadCmd advances changedtick after returning, even when the text is unchanged.
+    if not force and read and vim.deep_equal(read, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)) then
+      vim.b[bufnr].ipynb_code_spans_tick = tick
+    end
+  end
+  if not force and vim.b[bufnr].ipynb_code_spans_tick == tick then return vim.b[bufnr].ipynb_code_spans end
+  local spans = require("ipynb.native").request("code_spans", {
+    path = vim.api.nvim_buf_get_name(bufnr), spans = M.spans(bufnr),
+    text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"),
+  })
+  vim.b[bufnr].ipynb_code_spans, vim.b[bufnr].ipynb_code_spans_tick = spans, tick
+  return spans
+end
+
 local function cells()
   local parser = vim.treesitter.get_parser(0, "markdown")
   local tree = parser:parse()[1]

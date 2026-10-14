@@ -13,50 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-import jupytext
-import nbformat
-from jupytext.combine import combine_inputs_with_outputs
-
-
-def _read(path: str) -> Any:
-    # Explicitly selecting ipynb keeps this helper independent of filename
-    # extensions and preserves attachments, ids, metadata, and outputs.
-    return jupytext.read(path, fmt="ipynb", as_version=4)
-
-
-def _read_request(request: dict[str, Any]) -> dict[str, Any]:
-    path = Path(str(request.get("path", "")))
-    template = Path(str(request.get("template", "")))
-    source = path if path.is_file() and path.stat().st_size else template
-    if not source.is_file():
-        raise FileNotFoundError(f"notebook or template not found: {source or path}")
-
-    notebook = _read(str(source))
-    markdown = jupytext.writes(notebook, "md:markdown")
-    if markdown.endswith("\n"):
-        markdown = markdown[:-1]
-    return {
-        "text": markdown,
-        "metadata": notebook.metadata,
-        "notebook": notebook,
-    }
-
-
-def _convert_request(request: dict[str, Any]) -> Any:
-    source = jupytext.reads(str(request.get("text", "")), fmt="md:markdown")
-    existing = request.get("existing")
-    if existing is not None:
-        # Disk notebooks can store source and MIME text as arrays of lines.
-        # Keep the v4 hot path parse-free; older versions need nbformat's
-        # version-aware reader to upgrade their worksheet layout.
-        from nbformat.v4.nbjson import JSONReader
-
-        if existing.get("nbformat") == 4:
-            output_notebook = JSONReader().to_notebook(existing)
-        else:
-            output_notebook = nbformat.reads(json.dumps(existing), as_version=4)
-        source = combine_inputs_with_outputs(source, output_notebook, fmt="md:markdown")
-    return source
+import jupytext_adapter
 
 
 def _text(value: Any) -> str:
@@ -111,9 +68,13 @@ def _dispatch(request: Any) -> Any:
         raise TypeError("request must be a JSON object")
     operation = request.get("op")
     if operation == "read":
-        return _read_request(request)
+        return jupytext_adapter.read_request(request)
     if operation == "convert":
-        return _convert_request(request)
+        return jupytext_adapter.convert_request(request)
+    if operation == "jupytext_info":
+        return jupytext_adapter.info_request(request)
+    if operation == "jupytext_action":
+        return jupytext_adapter.action_request(request)
     if operation == "render":
         return _render_request(request)
     if operation == "shutdown":

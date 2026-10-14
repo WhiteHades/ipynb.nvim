@@ -1,47 +1,51 @@
-*ipynb.txt*  jupyter notebooks in neovim
+*ipynb.txt*  Jupyter notebooks in Neovim
 
-install                                                        *ipynb*
+Contents ~
+  Installation       |ipynb|
+  Configuration      |ipynb-options|
+  Saving             |ipynb-saving|
+  Runtime            |ipynb-rust|
+  Keys               |ipynb-keys|
+  Commands           |ipynb-commands|
+  Jupytext           |ipynb-jupytext|
+  Images             |ipynb-images|
 
-use lazy.nvim's package spec, including on lazyvim: >lua
+Installation                                                       *ipynb*
+
+Add the lazy.nvim package spec, including when you use LazyVim: >lua
   { "WhiteHades/ipynb.nvim", lazy = false, opts = {} }
 <
-:Lazy sync installs Lua dependencies and runs the notebook installer.
-:IpynbInstall runs the same installer to repair or update the runtime.
-Both check scripts/prerequisites.sh before helper, parser, or engine setup.
-If all required tools are ready, no prerequisite installation runs. Missing
-tools open a terminal with an install plan and a confirmation prompt, including
-sudo when needed. A successful check continues installation. Headless Neovim
-stops with a shell command instead of waiting for input.
+Run :Lazy sync and restart Neovim after installation. Use :IpynbInstall to
+repair or update the runtime. Missing tools need confirmation and may need
+sudo. For headless installation, run the printed setup command in a terminal.
 
-The build needs Neovim 0.12+, uv 0.13.1+, Rust/Cargo 1.88+, Git, curl,
-tar, pkg-config, a C/C++ compiler, and tree-sitter-cli 0.26.1+. Inline plots need
-ImageMagick's magick command and a compatible terminal, such as Kitty or Ghostty.
-The engine and parsers build from source; no prebuilt engine is installed.
+The build requires Neovim 0.12+, uv 0.13.1+, Rust/Cargo 1.88+, Git, curl, tar,
+pkg-config, a C/C++ compiler, and tree-sitter-cli 0.26.1+. Inline plots need
+ImageMagick's magick command and a terminal such as Kitty or Ghostty.
 
-New helper environments use Python 3.15.0 through uv, separate from project Python.
-Existing helper environments are reused. System Python, venv, and ensurepip are
-not required. From the plugin checkout: >sh
-  uv run --no-project --python 3.15.0 -- scripts/setup.py --venv /path/to/helper/venv
+To prepare a custom helper from the plugin checkout, run: >sh
+  uv run --no-project --python 3.15.0 -- scripts/setup.py \
+    --venv /path/to/helper/venv
 <
 To check host tools without installing them, run: >sh
   bash scripts/prerequisites.sh --check
 <
-Use --install to preview changes and ask before installing. --yes explicitly
-accepts the plan without a confirmation prompt; sudo may still need a password.
---no-images skips ImageMagick. Rust is the only execution backend;
-the old --python-backend flag is no longer supported.
+Use --install to install missing tools, --yes to accept the plan, or
+--no-images to skip ImageMagick. Sudo may still ask for a password.
+The installer supports apt, dnf, pacman, and Homebrew. Pacman upgrades the
+system. Rust installation may change the default toolchain to 1.88.0.
+Put ~/.local/bin and ~/.cargo/bin on PATH before restarting Neovim.
 
-The helper supports apt, dnf, pacman, and Homebrew. Pacman also upgrades the
-system. Missing or old uv and Rust use the supported system facility or an
-official upstream installer when packages are unavailable or too old. The Rust
-fallback can select Rust 1.88.0 as your default toolchain. User installers do
-not edit shell profiles. Put ~/.local/bin and ~/.cargo/bin on PATH before
-running uv or restarting Neovim.
-Restart after installation or an engine update. :checkhealth ipynb checks setup.
+Without lazy.nvim, install the dependencies in lazy.lua with your package
+manager and put the plugin on runtimepath. Call require('ipynb').setup(opts),
+install the markdown, markdown_inline, and python Tree-sitter parsers, then
+run :IpynbInstall.
 
-configuration                                              *ipynb-options*
+Run :checkhealth ipynb to check setup.
 
-all options are optional. do not set python unless using an existing environment.
+Configuration                                              *ipynb-options*
+
+Set python to use an existing editor helper. For example:
 >lua
   opts = {
     python = "/path/to/venv/bin/python",
@@ -54,136 +58,152 @@ all options are optional. do not set python unless using an existing environment
     output = { preview_lines = 8 },
   }
 <
-python supplies Jupytext conversion and kernel discovery, independently of
-project Python. The Rust process owns execution state and Jupyter transport.
-Python notebooks with a generic python3 kernelspec use the nearest project's
-.venv, resolved from the notebook path. Without a Python project, the notebook's
-directory is the root, even inside an unrelated Git repository. No user kernel
-registration is needed.
+Python notebooks with a generic python3 kernel use the nearest project's
+.venv. For standalone notebooks, the notebook directory is the project root.
 
-auto_setup=true is the default. On first execution, uv sets up a missing .venv.
-For an existing pyproject.toml, the plugin runs uv sync with --locked when uv.lock
-exists. It adds ipykernel with uv add --dev only if ipykernel is missing.
-For a standalone notebook, uv init --bare --vcs none --name notebook-env and
-uv add --dev ipykernel create pyproject.toml, uv.lock, and .venv in its directory.
-An existing .venv with ipykernel stays unchanged.
+Automatic project setup ~
 
-Setup needs uv and may need network access. Failures report an error without
-using global execution packages. Set auto_setup=false to disable automatic
-installation and provide a .venv with ipykernel yourself.
+auto_setup=true prepares the project's .venv on first execution. Standalone
+notebooks get pyproject.toml, uv.lock, and .venv beside the notebook.
+Setup uses uv and may need network access. Install plotting packages in the
+project environment. To manage setup yourself, set auto_setup=false and
+provide a .venv with ipykernel.
 
-kernel overrides automatic selection. Named notebook kernels and non-Python
-kernels remain registered-kernel selections. :IpynbInit opens a picker including
-project Python and registered/shared kernels. Remote kernels and connection
-files remain available. Local kernels start in the notebook's project directory.
+Kernel selection and language servers ~
+
+kernel overrides automatic selection. Named notebook kernels and kernels for
+languages other than Python use registered kernels. :IpynbInit opens a picker
+with project Python and registered or shared kernels. Remote kernels and
+connection files are also available. Local kernels start in the notebook's
+project directory.
 
 Completion and diagnostics use your existing Python language server. Pyright
-and basedpyright use the selected local Python, with separate project roots.
-kernel_python remains an optional LSP override; it does not select execution.
-Do not point python at every project's environment. The plugin does not use or
-change g:python3_host_prog, which belongs to other plugins.
+and basedpyright use the selected local Python with separate project roots.
+Set kernel_python to override the language server's Python interpreter.
+Use kernel to select execution.
 
-numpy_legacy_repr uses numpy's legacy="1.25" setting in new local python kernels.
-it changes display, not values or dtypes. external kernels keep their own setup.
-previously saved outputs retain their original text until those cells run again.
+Set numpy_legacy_repr=true for NumPy's legacy="1.25" display in new local
+Python kernels. Rerun cells to update saved output text.
 
-custom runtimes must provide requirements.txt themselves. the build step checks
-them and builds the Rust engine without changing their Python packages.
-With build=false, run :IpynbInstall after updates to rebuild the engine.
-Other environments can still be registered with ipykernel and chosen explicitly.
+Custom runtimes ~
 
-without lazy.nvim, install the dependencies listed in lazy.lua with your package
-manager, put this plugin on runtimepath, then call require('ipynb').setup(opts).
-Install the markdown, markdown_inline and python treesitter parsers and run
-:IpynbInstall.
+Install requirements.txt into a custom helper before setting python.
+Update those packages yourself. With build=false, run :IpynbInstall after
+updates. Register other environments with ipykernel to select them explicitly.
 
-the bundled runtime uses Ipynb commands and its own Lua namespace.
-it does not register or replace Molten commands from a separate installation.
+Notebook appearance ~
 
-saving                                                       *ipynb-saving*
+With lazy.nvim, notebook prose uses your render-markdown.nvim settings when
+that plugin is installed. Otherwise, notebooks use the built-in renderer.
+Code and output share your theme's code background. Without one, they use a
+darker Normal background, or stay transparent when Normal has no background.
+Moving into a code cell does not change its background.
 
-:w converts the editable Markdown and writes cell outputs in one atomic update.
-Execution marks changed outputs as unsaved, even when the code stays unchanged.
-The persistent Jupytext helper preserves notebook metadata, cell ids, and
-attachments. Rust handles JSON output and rejects writes when the file changed
-on disk since opening or saving. Reopening imports outputs without starting a
-kernel or executing cells by default. A missing or empty .ipynb opens with one
-empty code cell. Kernel memory is not stored; save model checkpoints
-separately. Exporting outputs also rejects concurrent disk changes. Ambiguous
-output-to-cell matches are rejected instead of writing results into the wrong cell.
+With Kitty graphics and ImageMagick, code and output use thicker pixel borders.
+Their curves and inset plot corners follow the terminal's cell size. Original
+images stay unchanged. Other image providers use plain terminal borders.
 
-rust backend                                                *ipynb-rust*
+Metadata uses a native fold with manual or expression folding. Normal movement
+skips the summary, and Insert mode opens the metadata for editing. Other fold
+providers are left unchanged and show raw metadata.
 
-:IpynbInstall builds native/target/release/ipynb-engine with Cargo. The engine
-uses Rust edition 2024. Python notebook cells still run in the selected Jupyter
-kernel; rewriting the coordinator does not accelerate their Python calculations.
-The small Python helper supplies Jupytext conversion and kernel discovery.
-requirements.txt lists only Jupytext and ipykernel, which install the required
-Jupyter and nbformat libraries. NumPy, Matplotlib, Pillow, pynvim, and jiter are
-not helper requirements. Install plotting packages in each notebook project's
-environment when its cells need them. Optional Plotly, Kaleido, pnglatex, and
-CairoSVG renderers need their own packages in the helper environment.
+Cell numbers and execution counts appear in the code border's right corner.
+Your number, relativenumber, and statuscolumn settings remain unchanged.
+Only visible running cells animate. Set vim.g.ipynb_animations = false to keep
+static status labels. The spinner also respects vim.g.snacks_animate = false.
 
-The Rust engine starts only when a notebook needs it. Lua registers its commands
-directly, so :UpdateRemotePlugins is not needed. :checkhealth ipynb checks the
-engine and helper. If the engine is missing, notebook operations report an error
-and ask you to run :IpynbInstall. Setup and :IpynbInstall still work before the
-engine is built. No Python execution fallback is provided.
-Set binary="/path/to/ipynb-engine" to use a separately built executable.
+Saving                                                       *ipynb-saving*
 
-Kernels start on first execution by default. auto_init=true starts one on open.
-If a kernel exits, saved and unsaved displayed results stay available. Running
-the next cell starts a replacement without rerunning earlier cells. :IpynbInfo
-shows the selected interpreter, working directory, and selection reason.
+:w saves code and outputs, including notebook metadata and attachments.
+Normal mode shows one metadata line. Use Insert mode to edit the full header.
+New outputs mark the notebook as unsaved. If a file changed elsewhere, resolve
+the conflict before saving. See |ipynb-jupytext| for paired files.
 
-The Python execution backend and optional jiter decoder have been removed.
-Remove backend="python" from older configurations. backend="rust" is accepted
-for compatibility but is unnecessary. IPYNB_DISABLE_RUST no longer has an effect.
+Reopen a notebook to see saved outputs. A new or empty .ipynb starts with one
+empty code cell. Save model checkpoints separately from notebook outputs.
 
-keys                                                           *ipynb-keys*
+Runtime                                                       *ipynb-rust*
 
-:Ipynb         open the notebook action menu
-<localleader>n  open the same menu
-<C-CR>         run cell
-<S-CR>         run cell and move to the next code cell
-<localleader>b  insert code cell below
-<localleader>m  insert markdown cell below
-<localleader>s  interrupt execution
-<localleader>r  run cell or visual selection
-<localleader>R  run all cells
-<localleader>a  run cell and above
-<localleader>o  open and focus output; normal vim motions scroll it
-<localleader>O  close output; q and <Esc> also work inside the output window
-<localleader>x  open the first image in the terminal viewer
-<localleader>i  restart kernel; keep displayed outputs and clear variables
+Run :IpynbInstall after plugin updates, then restart Neovim. Set
+binary="/path/to/ipynb-engine" to use a separately built engine.
+Install optional Plotly, Kaleido, pnglatex, or CairoSVG renderers in the
+helper environment when needed.
 
-existing keyboard mappings are not replaced. keymaps=false disables notebook keys.
+Kernels start on first execution. Set auto_init=true to start on opening.
+If a kernel stops, run a cell to start a replacement. Earlier results stay
+visible, but rerun cells needed to restore variables. :IpynbInfo shows the
+interpreter, working directory, and selection reason.
 
-commands                                                    *ipynb-commands*
+Migration ~
 
-:IpynbEnterOutput / :IpynbHideOutput  open and focus / close full output
-:IpynbImagePopup                     enlarge the current cell's first image
-:IpynbOpenInBrowser                  open the current cell's HTML in a browser
-:IpynbYankOutput                     copy text output to the unnamed register
-:IpynbYankOutput!                    copy text output to the system clipboard
-:IpynbInterrupt / :IpynbRestart      interrupt execution / restart the kernel
-:IpynbInfo                           show kernel information
+Remove backend and IPYNB_DISABLE_RUST settings from older configurations.
 
-images                                                        *ipynb-images*
+Keys                                                           *ipynb-keys*
 
-image.nvim outputs fit their available space, including enlarging small images.
-inline images use at most 90% of the content width and 75% of the available
-height, preserving aspect ratio. Markdown's percentage caps do not apply to
-notebook previews; image.nvim's absolute max_width/max_height limits still do.
-output.height and output.width optionally cap the full output window.
-Kitty-compatible terminals receive explicit cell dimensions, so Docker/SSH
-pixel-size estimates cannot leave a small bitmap inside a large output area.
+Existing mappings take precedence. Set keymaps=false to disable notebook keys.
+The default <localleader> is a backslash. Modified Enter keys depend on your
+terminal.
 
-with :set mouse=a, click an image in normal or insert mode to open just that
-image in a centered terminal viewer. :IpynbImagePopup and <localleader>x open the first image in the current
-cell. the viewer fits within 85% of the editor, resizes with the terminal, and
-closes with q or <Esc>. existing mouse mappings take precedence.
-it does not require a desktop image application.
-other image providers retain their existing external popup behavior.
+:Ipynb          Open the notebook action menu.
+<localleader>n  Open the same menu.
+<C-CR>          Run the cell.
+<S-CR>          Run the cell and move to the next code cell.
+<localleader>b  Insert a code cell below.
+<localleader>m  Insert a Markdown cell below.
+<localleader>s  Interrupt execution.
+<localleader>r  Run the cell or visual selection.
+<localleader>R  Run all cells.
+<localleader>a  Run the cell and cells above it.
+<localleader>o  Open and focus output. Normal Vim motions scroll the output.
+<localleader>O  Close output. q and <Esc> also work in the output window.
+<localleader>x  Open the first image in the terminal viewer.
+<localleader>i  Restart the kernel, keeping outputs and clearing variables.
+
+Commands                                                    *ipynb-commands*
+
+:IpynbEnterOutput    Open and focus the full output.
+:IpynbHideOutput     Close the full output.
+:IpynbImagePopup     Enlarge the current cell's first image.
+:IpynbOpenInBrowser  Open the current cell's HTML in a browser.
+:IpynbYankOutput     Copy text output to the unnamed register.
+:IpynbYankOutput!    Copy text output to the system clipboard.
+:IpynbInterrupt      Interrupt execution.
+:IpynbRestart        Restart the kernel.
+:IpynbInfo           Show kernel information.
+:IpynbJupytext       Open Jupytext formats and sync actions.
+
+Use :IpynbInit to choose a kernel, as described in |ipynb-options|. For
+installation and updates, see |ipynb|.
+
+Jupytext                                                   *ipynb-jupytext*
+
+:IpynbJupytext [action] supports info, export, pair, unpair, sync, pipe,
+check, and cli. The notebook action menu has the same Jupytext submenu.
+Choose a format in the picker and install any converter it requests. Put
+project settings in jupytext.toml or [tool.jupytext] in pyproject.toml.
+
+:w updates configured pairs unless a file changed externally. Use sync to
+choose which source to keep when pairs differ. Unpair keeps the files. If a
+paired save partly fails, check the error for files already saved.
+
+Pipe changes require diff approval and stay unsaved until :w. Pipe and check
+require an explicit command and stop after 20 seconds. The advanced CLI
+terminal supports other upstream options, but its writes bypass editor
+guards. Reload the notebook afterward.
+
+Use Jupytext 1.19.6 or newer. Update custom helpers from requirements.txt.
+See doc/jupytext.md for settings and workflows.
+
+Images                                                        *ipynb-images*
+
+Images fit the available space. Use image.nvim's max_width and max_height to
+limit image size, or output.height and output.width to cap the output window.
+
+With :set mouse=a, click an image in Normal or Insert mode to open only the
+clicked image in a centered terminal viewer. :IpynbImagePopup and
+<localleader>x open the first image in the current cell. The viewer fits
+within 85% of the editor and resizes with the terminal. Close with q or <Esc>.
+Existing mouse mappings take precedence. Other image providers use their own
+popup viewers.
 
  vim:tw=78:ts=8:ft=help:norl:

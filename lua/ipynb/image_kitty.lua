@@ -18,16 +18,23 @@ function M.track(img, term)
     end
     return
   end
+  local tmux = require("ipynb.image_tmux")
   local write = helpers.write_graphics_at
   helpers.write_graphics_at = function(config, x, y)
-    if images[config.image_id] and config.action == "p"
-      and config.display_width and config.display_height then
-      local size = term.get_size()
-      if size and size.cell_width > 0 and size.cell_height > 0 then
-        config = vim.tbl_extend("force", config, {
-          display_columns = math.max(1, math.ceil(config.display_width / size.cell_width)),
-          display_rows = math.max(1, math.ceil(config.display_height / size.cell_height)),
-        })
+    local img = images[config.image_id]
+    if img and config.action == "p" then
+      if img.global_state.disable_decorator_handling then return end
+      local offset = tmux.top_offset()
+      if offset == nil then return end
+      y = y + offset
+      if config.display_width and config.display_height then
+        local size = term.get_size()
+        if size and size.cell_width > 0 and size.cell_height > 0 then
+          config = vim.tbl_extend("force", config, {
+            display_columns = math.max(1, math.ceil(config.display_width / size.cell_width)),
+            display_rows = math.max(1, math.ceil(config.display_height / size.cell_height)),
+          })
+        end
       end
     end
     local result = write(config, x, y)

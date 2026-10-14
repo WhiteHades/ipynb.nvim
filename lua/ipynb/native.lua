@@ -42,12 +42,18 @@ end
 
 local function receive(message)
   if message.id then
+    if message.id == 0 then
+      if message.error then notify(message.error) end
+      return
+    end
     local request = pending[message.id]
     if request then
       request.result, request.error = message.result, message.error
       request.comparison = message.comparison
       request.done = true
     end
+  elseif closing then
+    return
   elseif message.event == "cells" then
     local _, changed = ui().sync(message.buf, message.cells)
     -- Execution changes saved outputs even when the code stays unchanged.
@@ -119,6 +125,7 @@ end
 
 local function start()
   if job then return end
+  local restarting = closing
   local binary = options.binary or root .. "/native/target/release/ipynb-engine"
   if vim.fn.executable(binary) ~= 1 then error("Rust engine is missing; run :IpynbInstall") end
   carry, closing = "", false
@@ -147,17 +154,29 @@ local function start()
       if message ~= "" then vim.schedule(function() if not closing then notify(message) end end) end
     end,
     on_exit = function(_, code)
+      local was_closing = closing
+      closing = true
       job = nil
       for _, request in pairs(pending) do request.error, request.done = "Notebook engine stopped", true end
-      for buf in pairs(state.buffers or {}) do ui().clear(tonumber(buf)) end
+      local loaded_ui = package.loaded["ipynb.native_ui"]
+      if loaded_ui then loaded_ui.shutdown() end
       state = { kernels = {}, buffers = {} }
       cell_status, copied_output = {}, {}
-      if code ~= 0 and not closing then vim.schedule(function() notify("Notebook engine exited: " .. code) end) end
+      if code ~= 0 and not was_closing then vim.schedule(function() notify("Notebook engine exited: " .. code) end) end
     end,
   })
   if job <= 0 then job = nil; error("Could not start the Rust notebook engine") end
   runtime_options = configured_options()
+  ui().configure(runtime_options)
   M.request("configure", runtime_options)
+  if restarting then
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.b[buf].ipynb_markdown_enabled == true then
+        vim.b[buf].ipynb_markdown_render_tick = nil
+        require("ipynb.markdown").refresh(buf)
+      end
+    end
+  end
 end
 
 function M.request(method, params)
@@ -351,7 +370,10 @@ function M.call(name, args, bang)
     local attached = buffer_kernels(buf)
     if #attached == 0 then
       if unload then
-        if job then M.request("unload", { buf = buf }) end
+        if job then
+          -- FIFO keeps later reads behind cleanup without blocking on a kernel-free buffer.
+          vim.fn.chansend(job, vim.json.encode({id=0, method="unload", params={buf=buf}}) .. "\n")
+        end
         ui().clear(buf)
         clear_buffer_state(buf)
         return
@@ -371,6 +393,8 @@ function M.call(name, args, bang)
     closing = true
     local count = #(state.kernels or {})
     for _ = 1, count do user_event("IpynbDeinitPre") end
+    local loaded_ui = package.loaded["ipynb.native_ui"]
+    if loaded_ui then loaded_ui.shutdown() end
     if job then
       local active = job
       pcall(M.request, "shutdown")
@@ -439,6 +463,11 @@ function M.call(name, args, bang)
   if name == "IpynbReevaluateAll" or name == "IpynbReevaluateCell" then
     local p = context()
     if name == "IpynbReevaluateCell" then local cell = current(); p.cell = cell.id end
+    for _, cell in ipairs(ui().cells(p.buf)) do
+      if (not p.cell or cell.id == p.cell) and type(cell.kernel) == "string" and cell.kernel:sub(1, 6) == "saved:" then
+        return kernel(p,args[1],function(value) return M.request("reevaluate",value) end)
+      end
+    end
     return M.request("reevaluate",p)
   end
   if name == "IpynbInterrupt" or name == "IpynbRestart" then
@@ -452,8 +481,16 @@ function M.call(name, args, bang)
   end
   if name == "IpynbImportOutput" or name == "IpynbExportOutput" then
     local p = context(true); p.path = notebook_path(args[1] or p.path); p.overwrite = bang or false
+    local in_place = name == "IpynbExportOutput" and bang and p.path == vim.api.nvim_buf_get_name(p.buf)
+    if in_place then p.mtime = vim.b[p.buf].mtime end
     if name == "IpynbImportOutput" and #buffer_kernels(p.buf) == 0 then return M.request("preview", p) end
-    return saved_kernel(p,args[2],function(value) return M.request(name == "IpynbImportOutput" and "import" or "export",value) end)
+    return saved_kernel(p,args[2],function(value)
+      local result = M.request(name == "IpynbImportOutput" and "import" or "export",value)
+      if in_place and result then
+        vim.b[p.buf].mtime = result.mtime
+      end
+      return result
+    end)
   end
   if name == "IpynbSave" then
     local p = context(true)
@@ -609,23 +646,33 @@ function M.setup(opts)
   -- Reclaim commands from stale Python remote-plugin manifests after upgrades.
   vim.api.nvim_create_autocmd("SourcePost",{group=group,pattern="*/plugin/rplugin.vim",callback=M.register})
   vim.api.nvim_create_autocmd("BufUnload",{group=group,callback=function(ev)
-    if #buffer_kernels(ev.buf)>0 then pcall(M.call,"IpynbOnBufferUnload",{ev.buf}) end
+    -- Saved output previews also own windows, even without a running kernel.
+    if not closing and (#buffer_kernels(ev.buf)>0 or #ui().cells(ev.buf)>0) then
+      pcall(M.call,"IpynbOnBufferUnload",{ev.buf})
+    end
   end})
   vim.api.nvim_create_autocmd("ExitPre",{group=group,callback=function()
-    if job then M.call("IpynbOnExitPre") end
+    M.call("IpynbOnExitPre")
   end})
   vim.api.nvim_create_autocmd({"CursorMoved","CursorMovedI"},{group=group,callback=function()
-    if job then M.call("IpynbOnCursorMoved") end
+    if job and not closing then M.call("IpynbOnCursorMoved") end
   end})
   vim.api.nvim_create_autocmd("WinScrolled",{group=group,callback=function()
-    if job then M.call("IpynbOnWinScrolled") end
+    if job and not closing then M.call("IpynbOnWinScrolled") end
   end})
   vim.api.nvim_create_autocmd({"WinResized","VimResized","BufEnter"},{group=group,callback=function()
-    if job then M.call("IpynbUpdateInterface") end
+    if job and not closing then M.call("IpynbUpdateInterface") end
   end})
   vim.api.nvim_create_autocmd("BufLeave",{group=group,callback=function()
-    if job then M.call("IpynbBufLeave") end
+    if job and not closing then M.call("IpynbBufLeave") end
   end})
+  -- Import Jupytext alongside editor startup only when a notebook was requested.
+  for _, path in ipairs(vim.fn.argv()) do
+    if path:match("%.ipynb$") and not path:find("://", 1, true) then
+      pcall(M.request, "warmup")
+      break
+    end
+  end
   return true
 end
 

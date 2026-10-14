@@ -4,8 +4,14 @@ return function(state, rich)
   local valid_buf, valid_win, number = state.valid_buf, state.valid_win, state.number
   local current_positions, source_window = state.current_positions, state.source_window
   local output_ns = state.output_ns
+  local panels = require("ipynb.panels")
+
+  local function panel_key(cell, kind)
+    return ("ipynb-panel-output-%s-%s-%s"):format(cell.buf, cell.id, kind)
+  end
 
   function M.clear_virtual(cell)
+    panels.remove(panel_key(cell, "virt"))
     rich.clear_images(cell, "virt")
     if cell.ui.virt_mark and valid_buf(cell.buf) then
       pcall(vim.api.nvim_buf_del_extmark, cell.buf, output_ns, cell.ui.virt_mark)
@@ -15,6 +21,7 @@ return function(state, rich)
   end
 
   function M.close_float(cell, restore_source)
+    panels.remove(panel_key(cell, "float"))
     rich.clear_images(cell, "float")
     local float = cell.ui.float
     if not float then return false end
@@ -92,12 +99,16 @@ return function(state, rich)
     local virt_lines = {}
     for index, line in ipairs(lines) do
       local group = (index == 1 or index == #lines) and rich.border_group(cell) or "IpynbVirtualText"
-      virt_lines[#virt_lines + 1] = { { line, group } }
+      virt_lines[#virt_lines + 1] = line:match("^│.*│$")
+        and { { "│", rich.border_group(cell) }, { line:sub(4, -4), group }, { "│", rich.border_group(cell) } }
+        or { { line, group } }
     end
     local mark_options = { virt_lines = virt_lines, strict = false }
     if cell.ui.virt_mark then mark_options.id = cell.ui.virt_mark end
     cell.ui.virt_mark = vim.api.nvim_buf_set_extmark(cell.buf, output_ns, anchor.line, 0, mark_options)
     cell.ui.virt_key = key
+    panels.output(panel_key(cell, "virt"), { buf = cell.buf, win = win, first = anchor.line,
+      width = width, height = #lines, label = cell.ui.panel_label, group = rich.border_group(cell) })
     for _, record in ipairs(rich.image_records(cell, "virt")) do pcall(record.api.render, record.id) end
     if #rich.image_records(cell, "virt") > 0 then rich.image_canvas(win, true) end
     if api.refresh then pcall(api.refresh) end
@@ -158,12 +169,18 @@ return function(state, rich)
 
     local border = rich.border_with_highlight(vim.deepcopy(state.options.output_win_border), cell)
     local border_width, border_height = border_size(border)
+    local graphical = panels.available() and border_width == 2 and border_height == 2
+    if graphical then border = rich.border_with_highlight({ " ", " ", " ", " ", " ", " ", " ", " " }, cell) end
     local screen_height = info.height - border_height
     local available_height = math.min(screen_height, number(state.options.output_win_max_height, 999999))
     local available_width = math.min(info.width - border_width, number(state.options.output_win_max_width, 999999))
     local gutter = state.options.output_win_cover_gutter and 0 or info.textoff
     available_width = available_width - gutter
-    if available_width < 1 or available_height < 1 then return false end
+    if available_width < 1 or available_height < 1 then
+      M.close_float(cell, true)
+      M.show_virtual(cell, true)
+      return false
+    end
 
     local float_key = table.concat({
       cell.revision, state.config_revision, source, end_pos.line, end_pos.col,
@@ -194,6 +211,10 @@ return function(state, rich)
       height = available_height,
     }, display_buf, float and float.win or nil, false)
     vim.api.nvim_buf_set_lines(display_buf, 0, -1, false, lines)
+    vim.api.nvim_buf_clear_namespace(display_buf, output_ns, 0, -1)
+    vim.api.nvim_buf_set_extmark(display_buf, output_ns, 0, 0, {
+      end_col = #lines[1], hl_group = rich.border_group(cell),
+    })
 
     local height = math.min(available_height, #lines)
     local row = source_relative_row(source, end_pos.line)
@@ -252,6 +273,8 @@ return function(state, rich)
     end
 
     reserve_float_space(cell, #lines + border_height)
+    if graphical then panels.output(panel_key(cell, "float"), { buf = display_buf, win = float.win,
+      float = true, group = rich.border_group(cell) }) end
     for _, record in ipairs(rich.image_records(cell, "float")) do pcall(record.api.render, record.id) end
     local api = rich.provider()
     if api.refresh then pcall(api.refresh) end

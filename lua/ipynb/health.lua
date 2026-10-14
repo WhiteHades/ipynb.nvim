@@ -176,6 +176,12 @@ function M.check()
       report_import(python, dependency[1], dependency[2])
     end
     vim.health.info("Notebook JSON uses Rust serde_json; the helper does not use Neovim's Python host")
+    local version = vim.system({ python, "-c", "import jupytext; from packaging.version import Version; print(jupytext.__version__); raise SystemExit(Version(jupytext.__version__) < Version('1.19.6'))" }, { text = true }):wait()
+    if version.code == 0 then
+      vim.health.ok("Jupytext " .. (last_line(version.stdout) or "1.19.6+"))
+    else
+      vim.health.error("Jupytext 1.19.6 or newer is required. Run :IpynbInstall or update the custom helper environment.")
+    end
   end
 
   if options.images and #vim.api.nvim_list_uis() > 0 then

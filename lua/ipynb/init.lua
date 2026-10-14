@@ -25,37 +25,8 @@ local function notify_missing_runtime()
   vim.notify("run :IpynbInstall, then restart Neovim. see :checkhealth ipynb.", vim.log.levels.WARN)
 end
 
-local function highlight_or_nil(name)
-  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
-  if not ok then
-    return {}
-  end
-
-  return hl
-end
-
 local function apply_notebook_output_highlights()
-  local info = highlight_or_nil("DiagnosticInfo")
-  local err = highlight_or_nil("DiagnosticError")
-  local warn = highlight_or_nil("DiagnosticWarn")
-  local success = highlight_or_nil("DiagnosticOk")
-  local muted = highlight_or_nil("Comment")
-  local normal_float = highlight_or_nil("NormalFloat")
-  local float_border = highlight_or_nil("FloatBorder")
-
-  local info_fg = info.fg or 0x61afef
-  local err_fg = err.fg or 0xe06c75
-  local float_bg = normal_float.bg
-
-  vim.api.nvim_set_hl(0, "IpynbOutputBorder", { fg = muted.fg or float_border.fg or 0x888888, bg = float_bg, bold = true })
-  vim.api.nvim_set_hl(0, "IpynbOutputBorderQueued", { fg = warn.fg or 0xe5c07b, bg = float_bg, bold = true })
-  vim.api.nvim_set_hl(0, "IpynbOutputBorderRunning", { fg = info_fg, bg = float_bg, bold = true })
-  vim.api.nvim_set_hl(0, "IpynbOutputBorderSuccess", { fg = success.fg or 0x98c379, bg = float_bg, bold = true })
-  vim.api.nvim_set_hl(0, "IpynbOutputBorderFail", { fg = err_fg, bg = float_bg, bold = true })
-  vim.api.nvim_set_hl(0, "IpynbOutputWin", { link = "NormalFloat" })
-  vim.api.nvim_set_hl(0, "IpynbOutputWinNC", { link = "NormalFloat" })
-  vim.api.nvim_set_hl(0, "IpynbOutputFooter", { fg = info_fg, bg = float_bg, bold = true })
-  vim.api.nvim_set_hl(0, "IpynbVirtualText", { fg = info_fg, bg = float_bg })
+  require("ipynb.highlights").setup()
 end
 
 local function configure_notebook_python_lsp(client, bufnr)
@@ -101,21 +72,14 @@ local function ensure_notebook_rendering(bufnr)
   end
 
   vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].filetype = "markdown"
+  if vim.bo[bufnr].filetype ~= "markdown" then vim.bo[bufnr].filetype = "markdown" end
   vim.wo.conceallevel = 3
   pcall(vim.treesitter.start, bufnr, "markdown")
 
   local render_ok, render = pcall(require, "render-markdown")
   if render_ok then
     pcall(vim.api.nvim_buf_call, bufnr, function()
-      render.buf_disable()
-    end)
-  end
-
-  local table_wrap_ok, table_wrap = pcall(require, "markdown-table-wrap")
-  if table_wrap_ok then
-    pcall(vim.api.nvim_buf_call, bufnr, function()
-      table_wrap.disable_auto_preview()
+      if require("ipynb.markdown_integration").active() then render.buf_enable() else render.buf_disable() end
     end)
   end
 
@@ -202,11 +166,6 @@ local function set_notebook_keymaps(bufnr)
     return
   end
 
-  local runner_ok, runner = pcall(require, "quarto.runner")
-  if not runner_ok then
-    return
-  end
-
   local function open_output()
     local notebook_buf = vim.api.nvim_get_current_buf()
     vim.cmd("noautocmd IpynbEnterOutput")
@@ -270,28 +229,30 @@ local function set_notebook_keymaps(bufnr)
         return
       end
 
-      -- quarto's runner reads a global config; restore it after this notebook call.
-      local previous = QuartoConfig.codeRunner
-      QuartoConfig.codeRunner = vim.tbl_extend("force", previous, { default_method = function(cell, ignore_cols)
-        local first, last = cell.range.from, cell.range.to
-        if ignore_cols then
-          vim.fn.IpynbEvaluateRange(first[1] + 1, last[1])
-        else
-          vim.fn.IpynbEvaluateRange(first[1] + 1, last[1], first[2] + 1, last[2] + 1)
-        end
-      end, ft_runners = {} })
-      local ok, err = pcall(fn)
-      QuartoConfig.codeRunner = previous
-      if not ok then error(err) end
+      fn()
       return true
     end
   end
 
-  local run_cell = run_with_kernel(runner.run_cell)
-  local run_all = run_with_kernel(runner.run_all)
-  local run_above = run_with_kernel(runner.run_above)
+  local function run_cells(scope)
+    local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local spans = require("ipynb.cells").executable(bufnr, true)
+    local found = false
+    for _, cell in ipairs(spans) do
+      local first, last = cell.begin[1] - 1, cell["end"][1] + 1
+      if scope == "all" or (scope == "above" and first <= row) or (first <= row and row <= last) then
+        vim.fn.IpynbEvaluateRange(cell.begin[1] + 1, cell["end"][1] + 1)
+        found = true
+      end
+    end
+    if not found then vim.notify("Place the cursor inside a code cell.", vim.log.levels.INFO) end
+  end
+  local run_cell = run_with_kernel(function() run_cells("cell") end)
+  local run_all = run_with_kernel(function() run_cells("all") end)
+  local run_above = run_with_kernel(function() run_cells("above") end)
+  local run_selection = run_with_kernel(function() vim.cmd("IpynbEvaluateVisual") end)
   local run_and_advance = run_with_kernel(function()
-    runner.run_cell()
+    run_cells("cell")
     require("ipynb.cells").advance()
   end)
   local function advance()
@@ -317,16 +278,27 @@ local function set_notebook_keymaps(bufnr)
     { "open full output", open_output }, { "close full output", hide },
     { "open rich output", open_rich_output }, { "interrupt execution", interrupt },
     { "restart kernel (clears variables)", restart },
+    { "Jupytext formats and sync", function() require("ipynb.jupytext").run("menu") end },
   }
   local function menu()
+    local path, tick = vim.api.nvim_buf_get_name(bufnr), vim.api.nvim_buf_get_changedtick(bufnr)
     vim.ui.select(actions, { prompt = "notebook", format_item = function(item) return item[1] end }, function(item)
-      if item then item[2]() end
+      if not item then return end
+      if not vim.api.nvim_buf_is_valid(bufnr) or vim.api.nvim_get_current_buf() ~= bufnr
+        or vim.api.nvim_buf_get_name(bufnr) ~= path or vim.api.nvim_buf_get_changedtick(bufnr) ~= tick then
+        vim.notify("Notebook changed or focus moved. Menu action cancelled; open the menu again.", vim.log.levels.WARN)
+        return
+      end
+      item[2]()
     end)
   end
   vim.api.nvim_buf_create_user_command(bufnr, "Ipynb", menu, { desc = "notebook actions" })
   map("n", "<localleader>n", menu, "notebook actions")
   map("n", "<localleader>r", run_cell, "run cell")
-  map("v", "<localleader>r", run_with_kernel(runner.run_range), "run selection")
+  map("v", "<localleader>r", function()
+    vim.cmd.normal({ vim.api.nvim_replace_termcodes("<Esc>", true, false, true), bang = true })
+    run_selection()
+  end, "run selection")
   map("n", "<C-CR>", run_cell, "run cell")
   map("n", "<S-CR>", advance, "run and advance")
   map("n", "<localleader>R", run_all, "run all cells")
@@ -358,7 +330,13 @@ local function activate_notebook_buffer(bufnr)
   end
 
   vim.api.nvim_buf_call(bufnr, function()
-    require("otter").activate({ "python" }, true, true)
+    local otter = require("otter")
+    local embedded = vim.fn.bufnr(vim.api.nvim_buf_get_name(bufnr) .. ".otter.py")
+    if embedded >= 0 and vim.api.nvim_buf_is_loaded(embedded) then
+      otter.sync_raft(bufnr)
+    else
+      otter.activate({ "python" }, true, true)
+    end
   end)
 
   vim.schedule(function()
@@ -412,7 +390,7 @@ local function install_runtime()
     if result.code ~= 0 then error(result.stderr .. result.stdout) end
   else
     local result = vim.system({ M.options.python, "-c",
-      "import ipykernel, jupytext",
+      "import ipykernel, jupytext; from packaging.version import Version; assert Version(jupytext.__version__) >= Version('1.19.6'), 'Jupytext 1.19.6 or newer is required'",
     }, { text = true }):wait()
     if result.code ~= 0 then
       error("custom python runtime needs requirements.txt installed first: " .. (result.stderr or ""))
@@ -460,17 +438,41 @@ function M.setup(opts)
     async_write = false,
   })
   require("ipynb.native").setup(M.options)
+  require("ipynb.jupytext").setup()
   require("ipynb.notebook_io").setup(require("jupytext"))
   local group = vim.api.nvim_create_augroup("ipynb", { clear = true })
   local function autocmd(events, callback)
     vim.api.nvim_create_autocmd(events, { group = group, pattern = "*.ipynb", callback = callback })
   end
-  autocmd({ "BufReadPre", "BufNewFile" }, function(ev) vim.bo[ev.buf].swapfile = false end)
+  autocmd({ "BufReadPre", "BufNewFile" }, function(ev)
+    vim.bo[ev.buf].swapfile = false
+    vim.bo[ev.buf].buftype = "acwrite"
+  end)
   autocmd({ "BufReadPost", "BufEnter" }, function(ev) activate_notebook_buffer(ev.buf) end)
   autocmd({ "BufWinEnter", "BufWritePost", "InsertLeave", "TextChanged" }, function(ev)
     require("ipynb.markdown").enable(ev.buf)
   end)
   autocmd("InsertEnter", function(ev) require("ipynb.markdown").disable(ev.buf) end)
+  vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, { group = group, callback = function()
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      if is_ipynb_buffer(buf) then require("ipynb.markdown").refresh(buf) end
+    end
+  end })
+  vim.api.nvim_create_autocmd("OptionSet", { group = group,
+    pattern = { "number", "relativenumber", "numberwidth", "statuscolumn", "signcolumn", "foldcolumn" },
+    callback = function()
+      local buf = vim.api.nvim_get_current_buf()
+      if not is_ipynb_buffer(buf) then return end
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) or vim.api.nvim_get_current_buf() ~= buf then return end
+        -- Measure the gutter after Neovim applies the user's numbering change.
+        vim.cmd("redraw")
+        require("ipynb.markdown").refresh(buf)
+        require("ipynb.native_ui").refresh(buf)
+      end)
+    end,
+  })
   autocmd("BufWritePost", function(ev)
     if vim.b[ev.buf].ipynb_native_write then
       vim.b[ev.buf].ipynb_native_write = nil

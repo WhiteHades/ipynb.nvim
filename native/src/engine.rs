@@ -1,4 +1,5 @@
 mod cells;
+mod jupytext;
 mod kernels;
 mod matching;
 mod outputs;
@@ -41,6 +42,7 @@ pub struct Engine {
     options: Value,
     assets: tempfile::TempDir,
     read_cache: Option<(PathBuf, std::time::SystemTime, Value)>,
+    paired: HashMap<PathBuf, jupytext::PairState>,
     dirty: BTreeSet<u64>,
     view_cache: HashMap<u64, Value>,
     events: Vec<Value>,
@@ -80,6 +82,7 @@ impl Engine {
             view_cache: HashMap::new(),
             events: vec![],
             read_cache: None,
+            paired: HashMap::new(),
         })
     }
 
@@ -87,6 +90,10 @@ impl Engine {
         self.sync_positions(params);
         let buf = params["buf"].as_u64().unwrap_or(0);
         match method {
+            "warmup" => {
+                self.converter.warmup()?;
+                Ok(Value::Null)
+            }
             "configure" => {
                 self.options = params.clone();
                 self.view_cache.clear();
@@ -104,6 +111,30 @@ impl Engine {
             }
             "init" => self.init(params),
             "deinit" | "unload" => self.deinit(buf),
+            "code_spans" => {
+                let spans = params["spans"]
+                    .as_array()
+                    .context("Cell spans are required")?;
+                let starts: Vec<_> = spans
+                    .iter()
+                    .enumerate()
+                    .map(|(index, span)| (index as u64, point(&span["begin"])))
+                    .collect();
+                let (_, positions) = matching::positioned_sources(
+                    &mut self.converter,
+                    &text(&params["text"]),
+                    &starts,
+                    params["path"].as_str().map(Path::new),
+                )?;
+                Ok(json!(
+                    spans
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| positions.contains_key(&(*index as u64)))
+                        .map(|(_, span)| span)
+                        .collect::<Vec<_>>()
+                ))
+            }
             "execute" | "define" => {
                 let kernel = self.selected_kernel(params)?;
                 self.kernels
@@ -131,6 +162,16 @@ impl Engine {
                     cells.iter().map(|c| c.id).collect()
                 };
                 for id in ids {
+                    if self
+                        .cells
+                        .iter()
+                        .any(|cell| cell.id == id && cell.kernel.starts_with("saved:"))
+                    {
+                        let kernel = self.selected_kernel(params)?;
+                        if let Some(cell) = self.cells.iter_mut().find(|cell| cell.id == id) {
+                            cell.kernel = kernel;
+                        }
+                    }
                     self.execute_cell(id)?;
                 }
                 Ok(Value::Null)
@@ -184,14 +225,17 @@ impl Engine {
             }
             "read" => self.read(params),
             "write" => self.write(params),
-            "import" | "preview" => {
+            "jupytext" => self.jupytext(params),
+            "preview" => {
+                let mut params = params.clone();
+                params["preview"] = json!(true);
+                Ok(json!(self.import(&params)?))
+            }
+            "import" => {
                 self.import(params)?;
                 Ok(Value::Null)
             }
-            "export" => {
-                self.export(params)?;
-                Ok(Value::Null)
-            }
+            "export" => self.export(params),
             "save" => {
                 self.save(params)?;
                 Ok(Value::Null)

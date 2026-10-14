@@ -4,6 +4,7 @@ local ok, image = pcall(require, "image")
 local images = {}
 local api = {}
 local term
+local backend_initialized = false
 local INLINE_WIDTH_FACTOR = 0.60
 local INLINE_HEIGHT_FACTOR = 0.50
 
@@ -59,25 +60,106 @@ local function positive(value)
   return type(value) == "number" and value > 0 and value < math.huge
 end
 
+local function render_prepared(img)
+  local info = vim.fn.getwininfo(img.window)[1]
+  local floating = vim.api.nvim_win_get_config(img.window).relative ~= ""
+  local x, y, bounds
+  if floating then
+    local origin = vim.fn.screenpos(img.window, info.topline, 1)
+    x = origin.col - 1 + img.geometry.x
+    y = origin.row + img.ipynb_row - info.topline
+    bounds = { left = origin.col - 1, right = origin.col - 1 + info.width,
+      top = origin.row - 1, bottom = origin.row + info.height - 2 }
+  else
+    if vim.api.nvim_win_call(img.window, function() return vim.fn.foldclosed(img.ipynb_row + 1) end) ~= -1 then
+      img:clear()
+      return
+    end
+    x = info.wincol - 1 + info.textoff + img.geometry.x
+    local pos = vim.fn.screenpos(img.window, img.ipynb_row + 1, 1)
+    if pos.row > 0 then
+      y = pos.row + img.render_offset_top
+    elseif img.ipynb_virtual_layout and img.ipynb_row == info.topline - 2 then
+      -- topfill counts the entire output, not just this bitmap. Keep captions,
+      -- other plots and bottom padding out of the image's scroll calculation.
+      local diff = vim.fn.screenpos(img.window, info.topline, 1).row - info.winrow
+      y = info.winrow - img.ipynb_virtual_layout.virtual_height + diff - 1 + img.render_offset_top
+    else
+      img:clear()
+      return
+    end
+    bounds = { left = info.wincol - 1 + info.textoff, right = info.wincol - 1 + info.width,
+      top = info.winrow - 1, bottom = info.winrow + info.height - 2 }
+  end
+  local width, height = img.geometry.width, img.geometry.height
+  if y + height <= bounds.top or y > bounds.bottom then img:clear(); return end
+  img.bounds = bounds
+  img.global_state.backend.render(img, x, y, width, height)
+  img.rendered_geometry = { x = x, y = y, width = width, height = height }
+end
+
 api.from_file = function(path, opts)
   if not ok then return nil end
   opts = opts or {}
   if opts.window == vim.NIL then opts.window = nil end
   local id = opts.id or path
   local img = images[id]
+  if img and img.ipynb_path ~= path then api.clear(id); img = nil end
   if not img then
     local loaded, result = pcall(image.from_file, path, opts)
     if not loaded or not result then return nil end
     img = result
     images[id] = img
+    img.ipynb_source_width, img.ipynb_source_height = img.image_width, img.image_height
     require("ipynb.image_kitty").track(img, term)
     local render = img.render
     -- Guard provider-triggered redraws and asynchronous conversion callbacks too.
     img.render = function(self, geometry)
       if self.ipynb_active == false or not self.window or not vim.api.nvim_win_is_valid(self.window) then return end
+      if not self.global_state.enabled or self.global_state.disable_decorator_handling then return end
+      if vim.api.nvim_win_get_buf(self.window) ~= self.buffer then self:clear(); return end
+      if vim.api.nvim_win_get_tabpage(self.window) ~= vim.api.nvim_get_current_tabpage() then self:clear(); return end
+      if not self.ipynb_frame and self.ipynb_row >= vim.api.nvim_buf_line_count(self.buffer) then self:clear(); return end
       local config = vim.api.nvim_win_get_config(self.window)
       if covered_by_output(self.window) then
         self:clear()
+        return
+      end
+      if self.ipynb_frame then
+        local frame = self.ipynb_frame
+        self.bounds = frame.bounds
+        self.global_state.backend.render(self, frame.x, frame.y, frame.width, frame.height)
+        self.rendered_geometry = frame
+        return
+      end
+      if api.panel_supported() and self.geometry.width and self.geometry.width > 0 then
+        local size = term.get_size()
+        local width = math.floor(self.geometry.width * size.cell_width + 0.5)
+        local height = math.floor(self.geometry.height * size.cell_height + 0.5)
+        local _, _, radius = require("ipynb.image_style").metrics(size)
+        local key = table.concat({ width, height, radius }, ":")
+        if self.ipynb_prepared ~= key then
+          if self.ipynb_preparing ~= key then
+            self.ipynb_preparing = key
+            self:clear()
+            require("ipynb.image_style").rounded(self.ipynb_path, width, height, radius,
+              self.ipynb_source_width, self.ipynb_source_height, function(path)
+              if images[id] ~= self or self.ipynb_preparing ~= key then return end
+              if not path then self:render(); return end
+              self.path, self.resized_path, self.cropped_path = path, path, path
+              -- Do not let image.nvim clone this padded canvas as the raw plot.
+              self.original_path = path
+              self.image_width, self.image_height = width, height
+              self.source_format = "png"
+              self.resize_hash, self.crop_hash, self.transform_key = nil, nil, nil
+              self.transform_signature, self.pending_transform_key = nil, nil
+              self.ipynb_prepared = key
+              self:render()
+            end)
+          end
+          return
+        end
+        render_prepared(self)
         return
       end
       if config.relative ~= "" then
@@ -92,6 +174,9 @@ api.from_file = function(path, opts)
   img.geometry.x, img.geometry.y = opts.x or 0, opts.y or 0
   img.ipynb_path = path
   img.ipynb_viewer = opts.viewer
+  img.ipynb_frame = opts.frame
+  img.ipynb_virtual_layout = opts.virtual_layout
+  if opts.frame then img.geometry.width, img.geometry.height = opts.frame.width, opts.frame.height end
   img.ipynb_row = opts.y or 0
   img.render_offset_top = opts.render_offset_top or 0
   img.with_virtual_padding = false
@@ -99,13 +184,13 @@ api.from_file = function(path, opts)
   -- Apply provider limits once during measurement, not again against the
   -- smaller output float during rendering.
   img.ignore_global_max_size = true
-  if opts.buffer and not opts.viewer and not vim.b[opts.buffer].ipynb_image_mouse then
+  if opts.buffer and not opts.viewer and not opts.frame and not vim.b[opts.buffer].ipynb_image_mouse then
     vim.b[opts.buffer].ipynb_image_mouse = true
     local function click()
       local mouse = vim.fn.getmousepos()
       for _, candidate in pairs(images) do
         local rect = candidate.rendered_geometry
-        if candidate.ipynb_active and candidate.is_rendered and rect
+        if not candidate.ipynb_frame and candidate.ipynb_active and candidate.is_rendered and rect
           and candidate.window == mouse.winid
           and mouse.screencol - 1 >= rect.x and mouse.screencol - 1 < rect.x + rect.width
           and mouse.screenrow - 1 >= rect.y and mouse.screenrow - 1 < rect.y + rect.height then
@@ -137,11 +222,27 @@ api.layout_key = function()
   return size and { size.cell_width, size.cell_height } or {}
 end
 
+api.panel_supported = function()
+  if not ok or vim.fn.executable("magick") ~= 1 then return false end
+  local style = package.loaded["ipynb.image_style"]
+  if style and style.failed then return false end
+  if not backend_initialized then
+    -- image.nvim defers backend setup until its first operation, even when a
+    -- notebook has only code/text. This nonexistent ID cannot clear user images.
+    backend_initialized = pcall(image.clear, "ipynb-panel-init-" .. vim.uv.os_getpid())
+  end
+  local loaded, backend = pcall(require, "image/backends/kitty")
+  local state = loaded and backend.state
+  local size = term and term.get_size()
+  return state and state.options.backend == "kitty" and state.options.kitty_method == "normal"
+    and size and positive(size.cell_width) and positive(size.cell_height) or false
+end
+
 api.image_size = function(id)
   local img = images[id]
   local size = term and term.get_size()
   if not img or not size or not positive(size.cell_width) or not positive(size.cell_height)
-    or not positive(img.image_width) or not positive(img.image_height) then
+    or not positive(img.ipynb_source_width) or not positive(img.ipynb_source_height) then
     if img then img.geometry.width, img.geometry.height = 0, 0 end
     return { width = 0, height = 0 }
   end
@@ -170,25 +271,30 @@ api.image_size = function(id)
     if positive(opts.max_height) then height = math.min(height, opts.max_height) end
   end
   local scale = math.min(
-    width * size.cell_width / img.image_width,
-    height * size.cell_height / img.image_height
+    width * size.cell_width / img.ipynb_source_width,
+    height * size.cell_height / img.ipynb_source_height
   )
   -- Keep fractional cell geometry for pixel aspect ratio; reserve whole rows.
   -- Avoid ceil(23.000000000000004) reserving a spurious row at the bound.
-  img.geometry.width = math.min(width, img.image_width * scale / size.cell_width)
-  img.geometry.height = math.min(height, img.image_height * scale / size.cell_height)
+  img.geometry.width = math.min(width, img.ipynb_source_width * scale / size.cell_width)
+  img.geometry.height = math.min(height, img.ipynb_source_height * scale / size.cell_height)
+  if api.panel_supported() then
+    -- Fit the original aspect ratio inside a whole-cell transparent canvas.
+    -- Explicit Kitty c/r sizing must not stretch a fractional last row/column.
+    img.geometry.width, img.geometry.height = math.ceil(img.geometry.width), math.ceil(img.geometry.height)
+  end
   return { width = math.ceil(img.geometry.width), height = math.ceil(img.geometry.height) }
 end
 
-api.render = function(id)
+local function render(id)
   local img = images[id]
   if not img then return end
   if not img.window or not vim.api.nvim_win_is_valid(img.window)
     or vim.api.nvim_win_get_buf(img.window) ~= img.buffer then
+    if img.ipynb_frame then img:clear(); return end
     img.window = vim.fn.bufwinid(img.buffer)
   end
   if img.window ~= -1 and vim.api.nvim_win_is_valid(img.window) then
-    img.ipynb_active = true
     if img.geometry.width and img.geometry.width > 0 then img:render() end
   end
 end
@@ -201,13 +307,27 @@ api.clear = function(id)
   end
 end
 
+local refresh_pending = false
 api.refresh = function()
-  for id, img in pairs(images) do
-    if img.ipynb_active then api.render(id) end
-  end
+  if refresh_pending then return end
+  refresh_pending = true
+  -- screenpos still describes the previous grid immediately after replacing
+  -- virtual output. Read it once Neovim has drawn the new extmarks.
+  vim.defer_fn(function()
+    refresh_pending = false
+    for id, img in pairs(images) do
+      if img.ipynb_active then render(id) end
+    end
+  end, 16)
 end
 
-vim.api.nvim_create_autocmd({ "WinScrolled", "WinClosed", "WinResized" }, {
+api.render = function(id)
+  if not images[id] then return end
+  images[id].ipynb_active = true
+  api.refresh()
+end
+
+vim.api.nvim_create_autocmd({ "WinScrolled", "WinClosed", "WinResized", "FocusGained", "TabEnter" }, {
   group = vim.api.nvim_create_augroup("ipynb_image_placements", { clear = true }),
   callback = function()
     vim.schedule(api.refresh)
@@ -215,6 +335,8 @@ vim.api.nvim_create_autocmd({ "WinScrolled", "WinClosed", "WinResized" }, {
 })
 
 api.clear_all = function()
+  local panels = package.loaded["ipynb.panels"]
+  if panels then panels.clear_all() end
   for id in pairs(images) do api.clear(id) end
   images = {}
 end

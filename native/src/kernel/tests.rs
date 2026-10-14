@@ -145,7 +145,8 @@ fn local_launch_preserves_kernelspec_argv_and_environment() {
     assert_eq!(lines.next(), Some(connection_argument.as_str()));
     let expected_env = std::env::var("HOME").ok();
     assert_eq!(lines.next(), expected_env.as_deref());
-    assert_eq!(lines.next(), directory.path().to_str());
+    let physical_cwd = directory.path().canonicalize().unwrap();
+    assert_eq!(lines.next(), physical_cwd.to_str());
     let expected_venv = std::env::var("VIRTUAL_ENV").unwrap_or_default();
     assert_eq!(lines.next(), Some(expected_venv.as_str()));
     let expected_path = std::env::var("PATH").unwrap_or_default();
@@ -170,7 +171,7 @@ fn local_launch_preserves_kernelspec_argv_and_environment() {
         assert!(child.wait().unwrap().success());
         let observed = fs::read_to_string(directory.path().join("observed")).unwrap();
         let lines: Vec<_> = observed.lines().collect();
-        assert_eq!(lines[4], directory.path().to_str().unwrap());
+        assert_eq!(lines[4], physical_cwd.to_str().unwrap());
         assert_eq!(
             lines[5],
             if explicit {
@@ -404,7 +405,7 @@ fn stopped_workers_report_once_reject_execution_and_still_join() {
     let spec = directory.path().join("kernel.json");
     fs::write(
         &spec,
-        json!({"argv":["/bin/true"],"language":"r"}).to_string(),
+        json!({"argv":["/usr/bin/true"],"language":"r"}).to_string(),
     )
     .unwrap();
     let kernel = Kernel::start("test", None, false, Some(&spec), None).unwrap();

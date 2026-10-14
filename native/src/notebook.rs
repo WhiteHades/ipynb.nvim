@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
@@ -14,7 +15,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Mtime {
     pub sec: i64,
     pub nsec: i64,
@@ -211,6 +212,52 @@ pub fn split_lines(notebook: &mut Value) {
 }
 
 pub fn write_atomic(path: &Path, notebook: &Value, expected: Option<&Value>) -> Result<Value> {
+    write_file_atomic(path, expected, false, |output| {
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+        notebook.serialize(&mut serde_json::Serializer::with_formatter(
+            &mut *output,
+            formatter,
+        ))?;
+        output.write_all(b"\n")?;
+        Ok(())
+    })
+}
+
+pub(crate) fn check_expected_mtime(path: &Path, expected: Option<&Value>) -> Result<()> {
+    check_mtime(path, expected_mtime(expected)?)
+}
+
+pub(crate) fn write_representation_atomic(
+    path: &Path,
+    content: &Value,
+    expected: Option<&Value>,
+) -> Result<Value> {
+    write_file_atomic(path, expected, expected.is_none(), |output| {
+        if let Some(notebook) = content.get("notebook") {
+            let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+            notebook.serialize(&mut serde_json::Serializer::with_formatter(
+                &mut *output,
+                formatter,
+            ))?;
+            output.write_all(b"\n")?;
+        } else {
+            output.write_all(
+                content["content"]
+                    .as_str()
+                    .context("Jupytext returned no file content")?
+                    .as_bytes(),
+            )?;
+        }
+        Ok(())
+    })
+}
+
+fn write_file_atomic(
+    path: &Path,
+    expected: Option<&Value>,
+    create_new: bool,
+    write: impl FnOnce(&mut BufWriter<&mut File>) -> Result<()>,
+) -> Result<Value> {
     let target = write_target(path)?;
     let expected = expected_mtime(expected)?;
     check_mtime(&target, expected)?;
@@ -244,16 +291,7 @@ pub fn write_atomic(path: &Path, notebook: &Value, expected: Option<&Value>) -> 
     })?;
     {
         let mut output = BufWriter::new(temporary.as_file_mut());
-        let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
-        notebook
-            .serialize(&mut serde_json::Serializer::with_formatter(
-                &mut output,
-                formatter,
-            ))
-            .context("could not serialize notebook")?;
-        output
-            .write_all(b"\n")
-            .context("could not terminate notebook")?;
+        write(&mut output).context("could not serialize notebook representation")?;
         output
             .flush()
             .context("could not write temporary notebook")?;
@@ -268,20 +306,35 @@ pub fn write_atomic(path: &Path, notebook: &Value, expected: Option<&Value>) -> 
             .context("could not preserve notebook permissions")?;
     }
 
+    let mtime = file_mtime(temporary.path())?.context("temporary notebook disappeared")?;
+    let mut hash = Sha256::new();
+    let mut file = File::open(temporary.path())?;
+    let mut buffer = [0; 32768];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    let digest = format!("{:x}", hash.finalize());
+
     // The conversion can take long enough for another process to modify the
     // file. Check once more immediately before the replacement.
     check_mtime(&target, expected)?;
-    temporary
-        .persist(&target)
-        .map_err(|error| error.error)
-        .with_context(|| format!("could not atomically replace {}", target.display()))?;
+    if create_new {
+        temporary.persist_noclobber(&target)
+    } else {
+        temporary.persist(&target)
+    }
+    .map_err(|error| error.error)
+    .with_context(|| format!("could not atomically replace {}", target.display()))?;
     File::open(parent)
         .with_context(|| format!("could not open {} for fsync", parent.display()))?
         .sync_all()
         .with_context(|| format!("could not fsync {}", parent.display()))?;
 
-    let mtime = file_mtime(&target)?.context("notebook disappeared after atomic write")?;
-    Ok(json!({"mtime": mtime}))
+    Ok(json!({"mtime": mtime, "digest": digest}))
 }
 
 #[cfg(test)]
@@ -310,6 +363,10 @@ mod tests {
         assert_eq!(original, once);
         let result = write_atomic(&path, &original, None)?;
         assert_eq!(read_json(&path)?, original);
+        assert_eq!(
+            result["digest"],
+            format!("{:x}", Sha256::digest(fs::read(&path)?))
+        );
 
         let mtime = result
             .get("mtime")

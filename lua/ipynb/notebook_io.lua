@@ -40,6 +40,13 @@ end
 
 local function open_notebook(jupytext, path, bufnr)
   if bufnr == 0 then bufnr = vim.api.nvim_get_current_buf() end
+  vim.b[bufnr].ipynb_code_spans_read = nil
+  -- :edit! replaces the buffer before the converter replies. Old extmarks
+  -- would otherwise collapse onto EOF and be reused for the reloaded cells.
+  local ui = package.loaded["ipynb.native_ui"]
+  if ui then ui.clear(bufnr) end
+  local panels = package.loaded["ipynb.panels"]
+  if panels then panels.code(bufnr, {}) end
   local result = vim.fn.IpynbNotebookRead(path, option(jupytext, "new_template"))
   local text = result.text or ""
   local lines = vim.split(text, "\n", { plain = true })
@@ -48,11 +55,19 @@ local function open_notebook(jupytext, path, bufnr)
   vim.b[bufnr].ipynb_read_kernel = ((result.metadata or {}).kernelspec or {}).name or false
   vim.b[bufnr].ipynb_language = ((result.metadata or {}).language_info or {}).name
     or ((result.metadata or {}).kernelspec or {}).language
-  set_filetype(jupytext, path, result.metadata or {}, bufnr)
-  if vim.fn.filereadable(path) == 1 then
-    require("ipynb.native").request("preview", { buf = bufnr, path = path, lines = lines,
-      spans = require("ipynb.cells").spans(bufnr) })
+  if type(result.paired_changed) == "table" and #result.paired_changed > 0 then
+    vim.schedule(function()
+      vim.notify("Jupytext pairs differ. Use :IpynbJupytext sync to choose the source before saving.", vim.log.levels.WARN)
+    end)
   end
+  if vim.fn.filereadable(path) == 1 then
+    local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+    local spans = require("ipynb.native").request("preview", { buf = bufnr, path = path, lines = lines,
+      spans = require("ipynb.cells").spans(bufnr) })
+    vim.b[bufnr].ipynb_code_spans, vim.b[bufnr].ipynb_code_spans_tick = spans, tick
+    vim.b[bufnr].ipynb_code_spans_read = lines
+  end
+  set_filetype(jupytext, path, result.metadata or {}, bufnr)
   vim.api.nvim_set_option_value("modified", false, { buf = bufnr })
   return result.metadata
 end

@@ -75,6 +75,8 @@ fn project_notebooks_select_isolated_environments_and_recover() {
         serde_json::to_vec(&notebook("STREAM_DONE")).unwrap(),
     )
     .unwrap();
+    let paired_script = first.with_extension("py");
+    let exported_markdown = first.with_file_name("jupytext-export.md");
     let report = fixture.path().join("report.json");
     let paths = serde_json::to_string(&json!([
         first, second, missing, empty, fresh, stream, shared
@@ -83,6 +85,7 @@ fn project_notebooks_select_isolated_environments_and_recover() {
     let script = format!(
         r#"
 local result = {{}}
+local original_input, original_select, original_notify = vim.ui.input, vim.ui.select, vim.notify
 local ok, err = xpcall(function()
   vim.opt.rtp:append(vim.env.IPYNB_TEST_PLUGINS .. '/nvim-lspconfig')
   vim.lsp.config('pyright', {{ cmd = {{ vim.env.IPYNB_PYRIGHT, '--stdio' }} }})
@@ -190,7 +193,108 @@ local ok, err = xpcall(function()
   result.stream = run(buf, 'STREAM_DONE')
   vim.cmd.write()
   result.stream_ms = (vim.uv.hrtime() - streamed) / 1e6
+  local first_buf = buffers[1]
+  vim.api.nvim_set_current_buf(first_buf)
+  local paired_script = vim.fn.fnamemodify(paths[1], ':r') .. '.py'
+  local export_path = vim.fn.fnamemodify(paths[1], ':h') .. '/jupytext-export.md'
+  local function snapshot()
+    vim.wait(10000, function() return #ui.cells(first_buf) >= 3 end, 20)
+    return {{ buffer = table.concat(vim.api.nvim_buf_get_lines(first_buf, 0, -1, false), '\n'),
+      mtime = vim.b[first_buf].mtime, disk_mtime = vim.uv.fs_stat(paths[1]).mtime,
+      cells = ui.cells(first_buf), kernel = native.running(first_buf), modified = vim.bo[first_buf].modified }}
+  end
+  local item = {{ before = snapshot() }}
+  result.jupytext = item
+  item.menu_cancelled = {{}}
+  for _, reason in ipairs({{'focus', 'changed'}}) do
+    vim.api.nvim_set_current_buf(first_buf)
+    local observation = {{ notices = {{}}, selections = 0 }}
+    item.menu_cancelled[reason] = observation
+    local pending, selected
+    vim.ui.select = function(items, _, callback)
+      observation.selections = observation.selections + 1
+      pending = callback
+      for _, candidate in ipairs(items) do
+        if type(candidate) == 'table' and candidate[1] == 'Jupytext formats and sync' then selected = candidate end
+      end
+    end
+    vim.notify = function(message) observation.notices[#observation.notices + 1] = tostring(message) end
+    vim.cmd('Ipynb')
+    if reason == 'focus' then
+      vim.api.nvim_set_current_buf(buffers[2])
+    else
+      vim.api.nvim_buf_set_lines(first_buf, -1, -1, false, {{'', 'MENU_CHANGED'}})
+    end
+    pending(selected)
+    observation.current = vim.api.nvim_get_current_buf()
+    observation.expected_current = reason == 'focus' and buffers[2] or first_buf
+    vim.notify = original_notify
+  end
+  vim.api.nvim_set_current_buf(first_buf)
+  local answer, choice = 'ipynb,py:percent', 'Pair without overwriting existing files'
+  vim.ui.input = function(_, callback) callback(answer) end
+  vim.ui.select = function(items, _, callback)
+    for _, candidate in ipairs(items) do
+      if candidate == choice or type(candidate) == 'table' and (candidate.source == choice or candidate.format == choice) then
+        callback(candidate); return
+      end
+    end
+    callback(nil)
+  end
+  vim.cmd('IpynbJupytext pair')
+  item.paired = snapshot()
+  item.pair_text = table.concat(vim.fn.readfile(paired_script, 'b'), '\n')
+  vim.fn.writefile({{'', '# %% [markdown]', '# EXTERNAL_JUPYTEXT_MARKDOWN'}}, paired_script, 'a')
+  local rejected = {{ notebook_before = vim.fn.readfile(paths[1], 'b'), pair_before = vim.fn.readfile(paired_script, 'b'), notices = {{}} }}
+  item.rejected = rejected
+  vim.notify = function(message, level) rejected.notices[#rejected.notices + 1] = {{ message = tostring(message), level = level }} end
+  rejected.write_ok, rejected.error = pcall(vim.cmd.write)
+  vim.notify = original_notify
+  rejected.notebook_after, rejected.pair_after = vim.fn.readfile(paths[1], 'b'), vim.fn.readfile(paired_script, 'b')
+  choice = paired_script
+  vim.cmd('IpynbJupytext sync')
+  item.synced = snapshot()
+  for _, cell in ipairs(ui.cells(first_buf)) do
+    if cell.source:find('PROJECT_ONE', 1, true) then
+      vim.api.nvim_win_set_cursor(0, {{cell.begin[1] + 1, 0}})
+      item.reevaluate_ok, item.reevaluate_error = pcall(native.call, 'IpynbReevaluateCell')
+      vim.wait(60000, function()
+        for _, updated in ipairs(ui.cells(first_buf)) do
+          if updated.id == cell.id and not updated.old and updated.status == 'done' then return true end
+        end
+        return false
+      end, 20)
+      item.reevaluated = snapshot()
+      break
+    end
+  end
+  item.save_ok, item.save_error = pcall(vim.cmd.write)
+  item.saved = snapshot()
+  answer, choice = export_path, 'md:markdown'
+  vim.cmd('IpynbJupytext export')
+  item.exported = snapshot()
+  item.pipe_disk_before = vim.fn.readfile(paths[1], 'b')
+  answer = "sed 's/^# print(/# PIPE_REVIEWED print(/'"
+  local picker = vim.ui.select
+  vim.ui.select = function(items, opts, callback)
+    if opts.prompt == 'Execute external command: ' .. answer then
+      callback('Run command')
+    elseif opts.prompt == 'Apply the reviewed pipe changes?' then
+      item.pipe_review = {{ filetype = vim.bo.filetype,
+        text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n') }}
+      callback('Apply to editor buffer')
+    else
+      picker(items, opts, callback)
+    end
+  end
+  vim.cmd('IpynbJupytext pipe')
+  vim.ui.select = picker
+  item.piped = snapshot()
+  item.pipe_disk_after = vim.fn.readfile(paths[1], 'b')
+  item.pipe_save_ok, item.pipe_save_error = pcall(vim.cmd.write)
+  item.pipe_saved = snapshot()
 end, debug.traceback)
+vim.ui.input, vim.ui.select, vim.notify = original_input, original_select, original_notify
 result.error = not ok and err or nil
 vim.fn.writefile({{vim.json.encode(result)}}, vim.env.IPYNB_REPORT)
 "#
@@ -387,4 +491,153 @@ vim.fn.writefile({{vim.json.encode(result)}}, vim.env.IPYNB_REPORT)
         "Streaming 2000 Unicode lines completed and saved in {:.1} ms",
         result["stream_ms"].as_f64().unwrap()
     );
+    let jupytext = &result["jupytext"];
+    assert_eq!(jupytext["before"]["kernel"], result["replacement"]);
+    for phase in ["paired", "synced", "saved", "exported", "pipe_saved"] {
+        let state = &jupytext[phase];
+        assert_eq!(
+            state["kernel"], jupytext["before"]["kernel"],
+            "{phase} changed the kernel"
+        );
+        assert_eq!(state["modified"], false, "{phase} left an unsaved buffer");
+        assert_eq!(
+            state["mtime"], state["disk_mtime"],
+            "{phase} has a stale mtime"
+        );
+        let outputs: String = state["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|cell| cell["lines"].to_string())
+            .collect();
+        assert!(
+            outputs.contains("KEEP") && outputs.contains("PROJECT_ONE"),
+            "{phase} lost output: {state}"
+        );
+        for cell in state["cells"].as_array().unwrap() {
+            assert_eq!(
+                cell["kernel"], state["kernel"][0],
+                "{phase} restored a cell with the wrong kernel: {cell}"
+            );
+        }
+    }
+    for reason in ["focus", "changed"] {
+        let cancelled = &jupytext["menu_cancelled"][reason];
+        assert_eq!(
+            cancelled["selections"], 1,
+            "stale menu opened Jupytext: {cancelled}"
+        );
+        assert_eq!(cancelled["current"], cancelled["expected_current"]);
+        assert!(
+            cancelled["notices"].to_string().contains("cancelled"),
+            "missing menu cancellation: {cancelled}"
+        );
+    }
+    assert_eq!(
+        jupytext["reevaluate_ok"], true,
+        "reevaluation failed: {}",
+        jupytext["reevaluate_error"]
+    );
+    assert!(
+        jupytext["reevaluated"]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cell| {
+                cell["source"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("PROJECT_ONE")
+                    && cell["old"] == false
+                    && cell["status"] == "done"
+                    && cell["lines"].to_string().contains("PROJECT_ONE")
+            }),
+        "restored cell was not reevaluated: {}",
+        jupytext["reevaluated"]
+    );
+    assert_eq!(jupytext["pipe_review"]["filetype"], "diff");
+    assert!(
+        jupytext["pipe_review"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("PIPE_REVIEWED")
+    );
+    assert_eq!(
+        jupytext["piped"]["modified"], true,
+        "pipe changes were not marked unsaved"
+    );
+    assert_eq!(
+        jupytext["pipe_disk_before"], jupytext["pipe_disk_after"],
+        "pipe application changed the notebook on disk"
+    );
+    assert_eq!(
+        jupytext["pipe_save_ok"], true,
+        "pipe save failed: {}",
+        jupytext["pipe_save_error"]
+    );
+    assert!(
+        jupytext["pipe_saved"]["buffer"]
+            .as_str()
+            .unwrap()
+            .contains("PIPE_REVIEWED")
+    );
+    assert_eq!(
+        jupytext["piped"]["buffer"],
+        jupytext["pipe_saved"]["buffer"]
+    );
+    assert!(jupytext["pair_text"].as_str().unwrap().contains("# %%"));
+    let rejected = &jupytext["rejected"];
+    assert_eq!(
+        rejected["write_ok"], false,
+        "write accepted a changed pair: {rejected}"
+    );
+    assert!(
+        rejected.to_string().contains("Paired files changed"),
+        "wrong write failure: {rejected}"
+    );
+    assert_eq!(
+        rejected["notebook_before"], rejected["notebook_after"],
+        "rejected write changed the notebook"
+    );
+    assert_eq!(
+        rejected["pair_before"], rejected["pair_after"],
+        "rejected write changed the script"
+    );
+    assert!(
+        jupytext["synced"]["buffer"]
+            .as_str()
+            .unwrap()
+            .contains("EXTERNAL_JUPYTEXT_MARKDOWN")
+    );
+    assert_eq!(
+        jupytext["save_ok"], true,
+        "save failed after sync: {}",
+        jupytext["save_error"]
+    );
+    assert_eq!(jupytext["synced"]["buffer"], jupytext["saved"]["buffer"]);
+    assert_eq!(
+        jupytext["saved"]["buffer"], jupytext["exported"]["buffer"],
+        "export changed the editor"
+    );
+    let saved: Value =
+        serde_json::from_slice(&fs::read(paired_script.with_extension("ipynb")).unwrap()).unwrap();
+    assert_eq!(saved["metadata"]["jupytext"]["formats"], "ipynb,py:percent");
+    assert!(
+        saved["cells"][0]["source"]
+            .to_string()
+            .contains("PIPE_REVIEWED")
+    );
+    assert!(saved["cells"][1]["outputs"].to_string().contains("KEEP"));
+    assert!(
+        saved["cells"][2]["outputs"]
+            .to_string()
+            .contains("PROJECT_ONE")
+    );
+    assert!(
+        fs::read_to_string(paired_script)
+            .unwrap()
+            .contains("EXTERNAL_JUPYTEXT_MARKDOWN")
+    );
+    let exported = fs::read_to_string(exported_markdown).unwrap();
+    assert!(exported.contains("```python") && exported.contains("EXTERNAL_JUPYTEXT_MARKDOWN"));
 }

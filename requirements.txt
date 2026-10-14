@@ -1,2 +1,2 @@
 ipykernel
-jupytext
+jupytext>=1.19.6
