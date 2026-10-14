@@ -421,6 +421,8 @@ local function install_runtime()
   local treesitter = require("nvim-treesitter")
   if treesitter.install then
     treesitter.install({ "markdown", "markdown_inline", "python" }):wait(300000)
+    -- Lazy can omit this directory from runtimepath before the first install.
+    vim.opt.runtimepath:prepend(require("nvim-treesitter.config").get_install_dir(""))
   else
     vim.cmd("TSInstallSync markdown markdown_inline python")
   end

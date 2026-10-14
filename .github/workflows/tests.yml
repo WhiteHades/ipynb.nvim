@@ -74,6 +74,7 @@ jobs:
           git clone --filter=blob:none --branch=stable https://github.com/folke/lazy.nvim.git "$XDG_DATA_HOME/nvim/lazy/lazy.nvim"
           cat > "$RUNNER_TEMP/ipynb-install.lua" <<'LUA'
           local ok, err = xpcall(function()
+            vim.opt.loadplugins = true
             local plugins = vim.fn.stdpath('data') .. '/lazy'
             vim.opt.rtp:prepend(plugins .. '/lazy.nvim')
             local specs = dofile(vim.env.GITHUB_WORKSPACE .. '/lazy.lua')
@@ -97,6 +98,8 @@ jobs:
           if not ok then io.stderr:write(err .. '\n'); vim.cmd('cquit 1') end
           vim.cmd('qa!')
           LUA
-          nvim --headless -u NONE -l "$RUNNER_TEMP/ipynb-install.lua"
+          nvim --headless -u "$RUNNER_TEMP/ipynb-install.lua"
+          test -x "$XDG_DATA_HOME/nvim/ipynb.nvim/venv/bin/python"
+          test -x "$GITHUB_WORKSPACE/native/target/release/ipynb-engine"
           echo "IPYNB_TEST_PYTHON=$XDG_DATA_HOME/nvim/ipynb.nvim/venv/bin/python" >> "$GITHUB_ENV"
       - run: cargo +stable test --release --locked --manifest-path native/Cargo.toml

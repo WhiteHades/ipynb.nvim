@@ -22,7 +22,8 @@ local ok, err = xpcall(function()
     return { wait = function() return { code = ready and 0 or 1, stdout = 'missing tool', stderr = '' } end }
   end
   local site = vim.fn.stdpath('data') .. '/site'
-  vim.opt.rtp:prepend(site)
+  vim.opt.rtp:remove(site)
+  package.loaded['nvim-treesitter.config'] = { get_install_dir = function() return site end }
   assert(#vim.api.nvim_get_runtime_file('parser/python.so', false) == 0)
   package.loaded['nvim-treesitter'] = { install = function()
     return { wait = function()
