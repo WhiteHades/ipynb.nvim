@@ -74,6 +74,7 @@ it does not register or replace Molten commands from a separate installation.
 saving                                                       *ipynb-saving*
 
 :w converts the editable Markdown and writes cell outputs in one atomic update.
+Execution marks changed outputs as unsaved, even when the code stays unchanged.
 The persistent Jupytext helper preserves notebook metadata, cell ids, and
 attachments. Rust handles JSON output and rejects writes when the file changed
 on disk since opening or saving. Reopening imports outputs without starting a

@@ -49,7 +49,13 @@ local function receive(message)
       request.done = true
     end
   elseif message.event == "cells" then
-    ui().sync(message.buf, message.cells)
+    local _, changed = ui().sync(message.buf, message.cells)
+    -- Execution changes saved outputs even when the code stays unchanged.
+    if changed and vim.api.nvim_buf_is_valid(message.buf) then
+      for _, cell in ipairs(message.cells or {}) do
+        if not cell.old then vim.bo[message.buf].modified = true; break end
+      end
+    end
     for _, cell in ipairs(message.cells or {}) do
       local key = tostring(message.buf) .. ":" .. tostring(cell.id)
       local previous = cell_status[key]

@@ -112,6 +112,7 @@ local ok, err = xpcall(function()
     buffers[index] = buf
     local item = {{ preview = ui.cells(buf), before = native.running(buf), open_ms = (vim.uv.hrtime() - opened) / 1e6 }}
     item.cells = run(buf, index == 1 and 'PROJECT_ONE' or 'PROJECT_TWO')
+    item.unsaved = vim.bo[buf].modified
     item.running = native.running(buf)
     vim.wait(10000, function()
       local otter = vim.fn.bufnr(paths[index] .. '.otter.py')
@@ -182,8 +183,8 @@ local ok, err = xpcall(function()
     {{'import sys, os',"for _ in range(2000): print('chunkλ', flush=True)","print('STREAM_DONE')"}})
   local streamed = vim.uv.hrtime()
   result.stream = run(buf, 'STREAM_DONE')
-  result.stream_ms = (vim.uv.hrtime() - streamed) / 1e6
   vim.cmd.write()
+  result.stream_ms = (vim.uv.hrtime() - streamed) / 1e6
 end, debug.traceback)
 result.error = not ok and err or nil
 vim.fn.writefile({{vim.json.encode(result)}}, vim.env.IPYNB_REPORT)
@@ -236,6 +237,7 @@ vim.fn.writefile({{vim.json.encode(result)}}, vim.env.IPYNB_REPORT)
         assert!(item["preview"][0]["lines"].to_string().contains("KEEP"));
         assert_eq!(item["preview"][2]["source"], "");
         assert_eq!(item["running"].as_array().unwrap().len(), 1);
+        assert_eq!(item["unsaved"], true, "running unchanged code did not mark outputs as unsaved");
         let project = path.parent().unwrap().parent().unwrap();
         let executable = project.join(".venv/bin/python");
         let rendered = item["cells"].to_string();

@@ -822,7 +822,7 @@ function M.sync(buf, cells)
   if not valid_buf(buf) or type(cells) ~= "table" then return false end
   local state = buffers[buf] or { by_id = {}, order = {}, selected_id = nil }
   buffers[buf] = state
-  local seen, order = {}, {}
+  local seen, order, changed_any = {}, {}, false
 
   for _, incoming in ipairs(cells) do
     if type(incoming) == "table" and incoming.id ~= nil then
@@ -853,6 +853,7 @@ function M.sync(buf, cells)
         cell.ui.hidden = false
       end
       if changed then
+        changed_any = true
         cell.revision = cell.revision + 1
         cell.ui.virt_key, cell.ui.float_key = nil, nil
       end
@@ -877,7 +878,7 @@ function M.sync(buf, cells)
     for _, win in ipairs(vim.fn.win_findbuf(buf)) do image_canvas(win, false) end
   end
   refresh(buf, false)
-  return true
+  return true, changed_any
 end
 
 function M.positions(buf)
