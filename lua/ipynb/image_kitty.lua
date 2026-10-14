@@ -4,13 +4,20 @@
 local M = {}
 local images = setmetatable({}, { __mode = "v" })
 local attached = false
+local warned = false
 
 function M.track(img, term)
   if not img.internal_id or img.global_state.options.backend ~= "kitty" then return end
   images[img.internal_id] = img
   if attached then return end
-  local helpers = package.loaded["image/backends/kitty/helpers"]
-  if not helpers then return end
+  local loaded, helpers = pcall(require, "image/backends/kitty/helpers")
+  if not loaded or type(helpers) ~= "table" or type(helpers.write_graphics_at) ~= "function" or type(helpers.update_sync_end) ~= "function" then
+    if not warned then
+      warned = true
+      vim.notify("ipynb.nvim: image.nvim's Kitty API changed. Update both plugins; notebook image adjustments are disabled.", vim.log.levels.WARN)
+    end
+    return
+  end
   local write = helpers.write_graphics_at
   helpers.write_graphics_at = function(config, x, y)
     if images[config.image_id] and config.action == "p"
@@ -23,7 +30,12 @@ function M.track(img, term)
         })
       end
     end
-    return write(config, x, y)
+    local result = write(config, x, y)
+    if images[config.image_id] and config.action == "p" then
+      -- shortcut: finish async Kitty frames after 20 ms; remove when upstream handles cold placements.
+      vim.defer_fn(helpers.update_sync_end, 20)
+    end
+    return result
   end
   attached = true
 end
