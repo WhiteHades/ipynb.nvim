@@ -252,10 +252,17 @@ fn runtime_outputs_survive_errors_and_stream_views_stay_current() {
         assert_eq!(views.len(), 2);
         assert_eq!(views[0]["lines"], json!(["one added"]));
         assert_eq!(views[1]["reused"], true);
-        engine.sync_positions(
-            &json!({"positions":[{"id":2,"begin":[2,0],"end":[2,3],"source":"new"}]}),
-        );
+        engine.sync_positions(&json!({"positions":[
+            {"id":"2","source":"ignored"},
+            {"id":99,"source":"unknown"},
+            {"source":"missing"},
+            {"id":2,"begin":[1,0],"end":[1,3],"source":"new"},
+            {"id":2,"begin":[2,0],"end":[2,3]}
+        ]}));
         assert!(!engine.view_cache.contains_key(&2));
+        assert_eq!(engine.cells[0].source, "one");
+        assert_eq!(engine.cells[1].source, "new");
+        assert_eq!(engine.cells[1].begin, [2, 0]);
         engine
             .dispatch("options", &json!({"show_mimetype_debug":true}))
             .unwrap();

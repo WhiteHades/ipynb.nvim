@@ -26,11 +26,10 @@ impl Engine {
     pub(super) fn sync_positions(&mut self, params: &Value) {
         if let Some(positions) = params["positions"].as_array() {
             for pos in positions {
-                if let Some(cell) = self
-                    .cells
-                    .iter_mut()
-                    .find(|c| Some(c.id) == pos["id"].as_u64())
-                {
+                let Some(id) = pos["id"].as_u64() else {
+                    continue;
+                };
+                if let Some(cell) = self.cells.iter_mut().find(|c| c.id == id) {
                     if cell.begin != point(&pos["begin"])
                         || cell.end != point(&pos["end"])
                         || pos["source"]
