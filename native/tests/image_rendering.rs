@@ -110,6 +110,27 @@ for _, pixels in ipairs({8, 16, 6}) do
   assert(math.abs(aspect - 4/3) < 0.1, 'font resize must preserve plot aspect ratio within cell rounding')
 end
 
+local screenpos_calls, offscreen_rows_measured, clear_before, render_before = 0, 0, clears, placements
+local screenpos = vim.fn.screenpos
+vim.fn.screenpos = function(...)
+  screenpos_calls = screenpos_calls + 1
+  local _, line = ...
+  if line and line >= 30 and line <= 69 then offscreen_rows_measured = offscreen_rows_measured + 1 end
+  return screenpos(...)
+end
+for row = 30, 69 do
+  local id = plot_api.from_file('offscreen-' .. row .. '.png', {
+    id='offscreen-' .. row, buffer=buf, window=win, x=2, y=row, max_width=20, max_height=5,
+  })
+  plot_api.image_size(id)
+  plot_api.render(id)
+end
+assert(vim.wait(1000, function() return clears >= clear_before + 40 end, 5), 'offscreen plots must be cleared')
+local refresh_screenpos_calls = screenpos_calls
+local refresh_clear_calls, refresh_render_calls = clears - clear_before, placements - render_before
+assert(offscreen_rows_measured == 0, 'offscreen plots must be culled before screen position measurement')
+vim.fn.screenpos = screenpos
+
 local ui = require('ipynb.native_ui')
 vim.g.ipynb_image_provider = 'none'
 ui.configure({image_provider='none', virt_lines_off_by_1=true})
@@ -140,7 +161,9 @@ assert(vim.deep_equal(ui.positions(notebook)[1]['end'], {1,8}), 'line and visual
 marks = vim.api.nvim_buf_get_extmarks(notebook, output_ns, 0, -1, {details=true})
 assert(#marks == 1 and marks[1][2] == 3, 'selection output must stay outside the containing code block')
 ui.shutdown()
-vim.fn.writefile({vim.json.encode({plots_rendered=placements})}, vim.env.IPYNB_TEST_REPORT)
+vim.fn.writefile({vim.json.encode({plots_rendered=placements, refresh_screenpos_calls=refresh_screenpos_calls,
+  offscreen_rows_measured=offscreen_rows_measured,
+  refresh_clear_calls=refresh_clear_calls, refresh_render_calls=refresh_render_calls})}, vim.env.IPYNB_TEST_REPORT)
 "#,
     )
     .unwrap();
@@ -157,5 +180,6 @@ vim.fn.writefile({vim.json.encode({plots_rendered=placements})}, vim.env.IPYNB_T
         String::from_utf8_lossy(&output.stderr)
     );
     let observed: Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    eprintln!("image rendering counters: {observed}");
     assert!(observed["plots_rendered"].as_u64().unwrap() > 0);
 }

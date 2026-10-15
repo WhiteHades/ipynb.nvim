@@ -75,6 +75,12 @@ local function render_prepared(img)
     bounds = { left = origin.col - 1, right = origin.col - 1 + info.width,
       top = origin.row - 1, bottom = origin.row + info.height - 2 }
   else
+    local line = img.ipynb_row + 1
+    local virtual_top = img.ipynb_virtual_layout and img.ipynb_row == info.topline - 2
+    if (line < info.topline and not virtual_top) or (info.botline and line > info.botline) then
+      img:clear()
+      return
+    end
     if vim.api.nvim_win_call(img.window, function() return vim.fn.foldclosed(img.ipynb_row + 1) end) ~= -1 then
       img:clear()
       return
