@@ -681,6 +681,34 @@ fn save_duplicate_fixture(engine: &mut Engine, path: &Path) -> Result<(String, V
 
 #[test]
 fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Result<()> {
+    let mut positioned = save_engine()?;
+    let source = "```python\n# 日本語\nprint(1)\n```\n\n```python\nprint(1)\n```";
+    let (sources, positions) = super::matching::positioned_sources(
+        &mut positioned.converter,
+        source,
+        &[(1, [1, 2]), (2, [2, 0]), (2, [2, 0]), (3, [6, 0])],
+        None,
+    )?;
+    assert_eq!(sources, ["# 日本語\nprint(1)", "print(1)"]);
+    assert_eq!(positions, HashMap::from([(1, 0), (2, 0), (3, 1)]));
+    for starts in [vec![(1, [1, 3])], vec![(1, [99, 0])], vec![(1, [1, 99])]] {
+        assert!(
+            super::matching::positioned_sources(&mut positioned.converter, source, &starts, None)
+                .is_err()
+        );
+    }
+    assert!(
+        super::matching::positioned_sources(
+            &mut positioned.converter,
+            source,
+            &[(7, [2, 0]), (7, [6, 0])],
+            None,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("Ambiguous notebook output position")
+    );
+    drop(positioned);
     for export in [false, true] {
         let directory = save_directory()?;
         let path = directory.path().join("duplicate.ipynb");

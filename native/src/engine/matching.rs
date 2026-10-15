@@ -69,6 +69,11 @@ pub(super) fn positioned_sources(
     for (offset, _, marker) in &insertions {
         marked.insert_str(*offset, marker);
     }
+    let marker_prefix = format!("__ipynb_{nonce}_");
+    let marker_ids: HashMap<_, _> = insertions
+        .iter()
+        .map(|(_, id, marker)| (marker.as_str(), *id))
+        .collect();
     // Let Jupytext locate the spans; source searches also match prose and duplicate cells.
     let converted = converter.convert_at(&marked, None, path)?;
     let mut sources = Vec::new();
@@ -80,16 +85,28 @@ pub(super) fn positioned_sources(
         if cell["cell_type"] != "code" {
             continue;
         }
-        let mut source = text(&cell["source"]);
-        for (_, id, marker) in &insertions {
-            if source.contains(marker) {
-                if positions.insert(*id, sources.len()).is_some() {
+        let source = text(&cell["source"]);
+        let mut clean = String::with_capacity(source.len());
+        let mut cursor = 0;
+        for (start, _) in source.match_indices(&marker_prefix) {
+            let digits = start + marker_prefix.len();
+            let Some(suffix) = source[digits..].find("__") else {
+                continue;
+            };
+            let end = digits + suffix + 2;
+            if let Some(id) = marker_ids.get(&source[start..end]) {
+                if positions
+                    .insert(*id, sources.len())
+                    .is_some_and(|previous| previous != sources.len())
+                {
                     bail!("Ambiguous notebook output position; file was not changed");
                 }
-                source = source.replace(marker, "");
+                clean.push_str(&source[cursor..start]);
+                cursor = end;
             }
         }
-        sources.push(source);
+        clean.push_str(&source[cursor..]);
+        sources.push(clean);
     }
     Ok((sources, positions))
 }
