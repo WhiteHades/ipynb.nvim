@@ -73,10 +73,18 @@ return function(state, rich)
   local function output_end(cell)
     local first, last = current_positions(cell)
     if not first or not last then return end
-    local spans = vim.b[cell.buf].ipynb_code_spans
-    if vim.b[cell.buf].ipynb_code_spans_tick ~= vim.api.nvim_buf_get_changedtick(cell.buf) then
-      local ok, parsed = pcall(require("ipynb.cells").spans, cell.buf)
-      spans = ok and parsed or nil
+    local buffer = state.buffers[cell.buf]
+    local tick = vim.api.nvim_buf_get_changedtick(cell.buf)
+    local spans
+    if vim.b[cell.buf].ipynb_code_spans_tick == tick then
+      spans = vim.b[cell.buf].ipynb_code_spans
+    else
+      if buffer.layout_tick ~= tick then
+        buffer.layout_tick = tick
+        local ok, parsed = pcall(require("ipynb.cells").spans, cell.buf)
+        buffer.layout_spans = ok and parsed or nil
+      end
+      spans = buffer.layout_spans
     end
     if spans then
       for _, span in ipairs(spans) do

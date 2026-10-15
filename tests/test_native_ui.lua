@@ -72,6 +72,30 @@ end
 
 assert(ui.sync(buf, { cell("hold") }))
 assert(inline_group() == "IpynbOutputBorderQueued")
+-- Converter spans can become available after an Insert refresh at the same tick.
+local cells = package.loaded['ipynb.cells']
+vim.api.nvim_buf_set_lines(buf, -1, -1, false, {'', ''})
+package.loaded['ipynb.cells'] = {spans=function()
+  return {{begin={0,0}, ['end']={2,0}}}
+end}
+vim.b[buf].ipynb_code_spans_tick = nil
+ui.refresh(buf)
+local function anchor()
+  return vim.api.nvim_buf_get_extmarks(buf,
+    vim.api.nvim_get_namespaces()['ipynb-native-output'], 0, -1, {})[1][2]
+end
+assert(anchor() == 3)
+vim.b[buf].ipynb_code_spans = {{begin={0,0}, ['end']={1,0}}}
+vim.b[buf].ipynb_code_spans_tick = vim.api.nvim_buf_get_changedtick(buf)
+ui.refresh(buf)
+assert(anchor() == 2, 'fresh converter spans must replace same-tick fallback spans')
+vim.b[buf].ipynb_code_spans = {{begin={0,0}, ['end']={2,0}}}
+ui.refresh(buf)
+assert(anchor() == 3, 'forced converter refresh must replace same-tick executable spans')
+vim.b[buf].ipynb_code_spans, vim.b[buf].ipynb_code_spans_tick = nil, nil
+package.loaded['ipynb.cells'] = cells
+vim.api.nvim_buf_set_lines(buf, 2, -1, false, {})
+ui.refresh(buf)
 local created, cleared = #calls.from_file, #calls.clear
 ui.refresh(buf)
 vim.api.nvim_win_set_cursor(0, { 1, 1 })

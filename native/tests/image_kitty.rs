@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command};
 
 #[test]
-fn notebook_kitty_placements_preserve_geometry_and_finish_the_frame() {
+fn notebook_kitty_placements_preserve_geometry_and_coalesce_frame_completion() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let base = root.join(".tmp/image-kitty");
     fs::create_dir_all(&base).unwrap();
@@ -12,6 +12,7 @@ fn notebook_kitty_placements_preserve_geometry_and_finish_the_frame() {
     fs::write(&script, r#"
 vim.opt.rtp:prepend(vim.env.IPYNB_TEST_ROOT)
 local writes, deferred, counts, loads, finishes = {}, {}, {}, 0, 0
+local completions = {}
 local helpers = {
   write_graphics_at = function(config, x, y)
     writes[#writes + 1] = {config=vim.deepcopy(config), x=x, y=y}
@@ -22,6 +23,7 @@ local helpers = {
 
 package.preload['image/backends/kitty/helpers'] = function() loads = loads + 1; return helpers end
 vim.defer_fn = function(callback, delay) deferred[#deferred + 1] = {callback=callback, delay=delay} end
+vim.schedule = function(callback) completions[#completions + 1] = callback end
 local cold = package.loaded['image/backends/kitty/helpers'] == nil
 local bridge = require('ipynb.image_kitty')
 local img = {internal_id=7, global_state={options={backend='kitty'}}}
@@ -39,6 +41,8 @@ helpers.write_graphics_at({action='p', image_id=7}, 3, 4)
 counts[#counts + 1] = #deferred
 local delays, before = {}, finishes
 for _, item in ipairs(deferred) do delays[#delays + 1] = item.delay; item.callback() end
+assert(#completions == 1, 'placements must share one scheduled frame completion')
+for _, callback in ipairs(completions) do callback() end
 package.loaded['ipynb.image_kitty'] = nil
 package.loaded['image/backends/kitty/helpers'] = {}
 local warnings = {}
@@ -50,7 +54,11 @@ vim.fn.writefile({vim.json.encode({cold=cold, loads=loads, writes=writes, origin
   survived=survived, failure=failure, warnings=warnings})}, vim.env.IPYNB_TEST_REPORT)
 -- Keep tmux variants in this transport smoke check, not a separate Lua runner.
 package.loaded['ipynb.image_kitty'], package.loaded['ipynb.image_tmux'] = nil, nil
-local tmux, queries, scheduled = {is_tmux=true}, 0, {}
+local tty, tty_queries = '/dev/pts/1', 0
+local tmux, queries, scheduled = {is_tmux=true, get_pane_tty=function()
+  tty_queries = tty_queries + 1
+  return tty
+end}, 0, {}
 local reply = '1 1 1 top on 40 0\n'
 package.preload['image/utils/tmux'] = function() return tmux end
 package.loaded['image/utils/tmux'] = nil
@@ -84,6 +92,10 @@ local function place(expected)
 end
 place(14); place(14)
 assert(queries == 1, 'one tmux snapshot per render batch')
+assert(tmux.get_pane_tty() == '/dev/pts/1' and tmux.get_pane_tty() == '/dev/pts/1')
+assert(tty_queries == 1, 'clears share the active pane lookup within a batch')
+batch(); tty = '/dev/pts/2'
+assert(tmux.get_pane_tty() == '/dev/pts/2' and tty_queries == 2, 'pane switches invalidate the clear destination')
 for _, case in ipairs({{'bottom on 40',13},{'top off 40',13},{'top 2 40',15},
   {'top 0 40',13},{'top 1 40',14},{'bottom 2 40',13},{'top 2 2',13},{'top 2 1',13}}) do
   batch('1 1 1 ' .. case[1] .. ' 0\n'); place(case[2])
@@ -131,6 +143,7 @@ assert(last.x == 16 and last.y == 13 and queries == before_queries)
     let mut placed = original;
     placed["display_columns"] = json!(40);
     placed["display_rows"] = json!(20);
+    placed["display_zindex"] = json!(1);
     assert_eq!(
         observed["writes"][0],
         json!({"config":placed, "x":4, "y":6})
@@ -140,10 +153,10 @@ assert(last.x == 16 and last.y == 13 and queries == before_queries)
         json!({"config":observed["other"], "x":1, "y":2})
     );
     assert_eq!(observed["other"]["display_columns"], Value::Null);
-    assert_eq!(observed["counts"], json!([1, 1, 1, 2]));
-    assert_eq!(observed["delays"], json!([20, 20]));
+    assert_eq!(observed["counts"], json!([0, 0, 0, 0]));
+    assert_eq!(observed["delays"], json!([]));
     assert_eq!(observed["before"], 0);
-    assert_eq!(observed["finishes"], 2);
+    assert_eq!(observed["finishes"], 1);
     assert_eq!(observed["survived"], true);
     assert_eq!(observed["warnings"].as_array().unwrap().len(), 1);
     assert!(

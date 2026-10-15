@@ -163,7 +163,13 @@ local ok, err = xpcall(function()
       and #vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {}) > 0
       and #vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces()['ipynb-cell-header'], 0, -1, {}) > 0
     vim.api.nvim_buf_set_lines(buf, insert_span['end'][1] + 1, insert_span['end'][1] + 1, false, {'# inserted while editing'})
+    local cells = require('ipynb.cells')
+    local parse, parses = cells.spans, 0
+    cells.spans = function(...) parses = parses + 1; return parse(...) end
     vim.api.nvim_exec_autocmds('TextChangedI', {buffer=buf})
+    for _ = 1, 3 do require('ipynb.native_ui').refresh(buf) end
+    cells.spans = parse
+    insert_visible = insert_visible and parses == 1
     local expanded = false
     for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {details=true})) do
       if mark[2] == insert_span['end'][1] + 2 and mark[4].virt_text_pos == 'overlay' then expanded = true end
@@ -241,9 +247,12 @@ local ok, err = xpcall(function()
   ui.refresh(buf)
   local header_ns = vim.api.nvim_get_namespaces()['ipynb-cell-header']
   local stationary_headers = vim.api.nvim_buf_get_extmarks(buf, header_ns, 0, -1, {details=true})
-  for _ = 1, 10 do require('ipynb.native').call('IpynbOnCursorMoved') end
+  for _ = 1, 10 do
+    require('ipynb.native').call('IpynbOnCursorMoved')
+    require('ipynb.native').call('IpynbOnWinScrolled')
+  end
   assert(vim.deep_equal(stationary_headers, vim.api.nvim_buf_get_extmarks(buf, header_ns, 0, -1, {details=true})),
-    'cursor-only movement must not replace unchanged cell decorations')
+    'cursor movement and scrolling must not replace unchanged cell decorations')
   for _, state in ipairs({
     {'hold', true, false, 'Queued', 'Queued'}, {'running', true, false, 'Running', 'Running'},
     {'done', true, false, 'Done', 'Success'}, {'done', false, false, 'Failed', 'Fail'},

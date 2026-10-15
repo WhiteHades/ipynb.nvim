@@ -19,6 +19,7 @@ function M.refresh(buf)
   end
   if not width or width < 20 then return end
   local animate = vim.g.ipynb_animations ~= false and vim.g.snacks_animate ~= false and #vim.api.nvim_list_uis() > 0
+  local graphical = require("ipynb.panels").available()
   local busy = false
   for index, cell in ipairs(require("ipynb.native_ui").cell_headers(buf)) do
     local row = cell.row
@@ -34,7 +35,7 @@ function M.refresh(buf)
       if moving then
         label = frames[math.floor(vim.uv.hrtime() / 120000000) % #frames + 1] .. " " .. label
       end
-      local edge = require("ipynb.panels").available() and "   " or " ─╮"
+      local edge = graphical and "   " or " ─╮"
       local text = (" Cell %d  In[%s]  %s%s"):format(index, count, label, edge)
       if vim.fn.strdisplaywidth(text) > width - 12 then text = (" %d  In[%s]%s"):format(index, count, edge) end
       if vim.fn.strdisplaywidth(text) > width - 12 then text = (" %d%s"):format(index, edge) end

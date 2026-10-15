@@ -5,6 +5,7 @@ local M = {}
 local images = setmetatable({}, { __mode = "v" })
 local attached = false
 local warned = false
+local finishing = false
 
 function M.track(img, term)
   if not img.internal_id or img.global_state.options.backend ~= "kitty" then return end
@@ -27,6 +28,8 @@ function M.track(img, term)
       local offset = tmux.top_offset()
       if offset == nil then return end
       y = y + offset
+      -- Keep notebook graphics above opaque cell backgrounds in Ghostty.
+      config = vim.tbl_extend("force", config, { display_zindex = 1 })
       if config.display_width and config.display_height then
         local size = term.get_size()
         if size and size.cell_width > 0 and size.cell_height > 0 then
@@ -38,9 +41,13 @@ function M.track(img, term)
       end
     end
     local result = write(config, x, y)
-    if images[config.image_id] and config.action == "p" then
-      -- shortcut: finish async Kitty frames after 20 ms; remove when upstream handles cold placements.
-      vim.defer_fn(helpers.update_sync_end, 20)
+    if images[config.image_id] and config.action == "p" and not finishing then
+      finishing = true
+      -- Finish after queued TUI writes, including cold asynchronous placements.
+      vim.schedule(function()
+        finishing = false
+        helpers.update_sync_end()
+      end)
     end
     return result
   end

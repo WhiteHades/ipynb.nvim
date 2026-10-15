@@ -40,14 +40,18 @@ if ok then
   end)
 end
 
-local function covered_by_float(win)
+local function covered_by_float(win, bounds)
   local source = vim.fn.getwininfo(win)[1]
+  if bounds then
+    source = {winrow=bounds.top + 1, wincol=bounds.left + 1,
+      height=bounds.bottom - bounds.top + 1, width=bounds.right - bounds.left}
+  end
   local source_z = vim.api.nvim_win_get_config(win).zindex or 0
   for _, other in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if other ~= win then
       local config = vim.api.nvim_win_get_config(other)
       local info = vim.fn.getwininfo(other)[1]
-      if config.relative ~= "" and (config.zindex or 50) > source_z and info.winrow < source.winrow + source.height
+      if config.relative ~= "" and not config.hide and (config.zindex or 50) > source_z and info.winrow < source.winrow + source.height
         and info.winrow + info.height > source.winrow
         and info.wincol < source.wincol + source.width
         and info.wincol + info.width > source.wincol then return true end
@@ -93,6 +97,10 @@ local function render_prepared(img)
   end
   local width, height = img.geometry.width, img.geometry.height
   if y + height <= bounds.top or y > bounds.bottom then img:clear(); return end
+  if covered_by_float(img.window, {left=x, right=x+width, top=y, bottom=y+height-1}) then
+    img:clear()
+    return
+  end
   img.bounds = bounds
   img.global_state.backend.render(img, x, y, width, height)
   img.rendered_geometry = { x = x, y = y, width = width, height = height }
@@ -121,12 +129,10 @@ api.from_file = function(path, opts)
       if vim.api.nvim_win_get_tabpage(self.window) ~= vim.api.nvim_get_current_tabpage() then self:clear(); return end
       if not self.ipynb_frame and self.ipynb_row >= vim.api.nvim_buf_line_count(self.buffer) then self:clear(); return end
       local config = vim.api.nvim_win_get_config(self.window)
-      if covered_by_float(self.window) then
-        self:clear()
-        return
-      end
       if self.ipynb_frame then
         local frame = self.ipynb_frame
+        if covered_by_float(self.window, frame.bounds) then self:clear(); return end
+        if self.is_rendered and self.rendered_geometry == frame then return end
         self.bounds = frame.bounds
         self.global_state.backend.render(self, frame.x, frame.y, frame.width, frame.height)
         self.rendered_geometry = frame
@@ -162,6 +168,7 @@ api.from_file = function(path, opts)
         render_prepared(self)
         return
       end
+      if covered_by_float(self.window) then self:clear(); return end
       if config.relative ~= "" then
         -- The renderer adds one row to a float's rect.top. Convert the real
         -- buffer row to that convention after accounting for viewport scroll.
@@ -321,6 +328,27 @@ api.refresh = function()
     end
   end)
 end
+
+local float_layout
+vim.api.nvim_set_decoration_provider(vim.api.nvim_create_namespace("ipynb_image_masks"), {
+  on_end = function()
+    if not next(images) then return end
+    local floats = {}
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      local config = vim.api.nvim_win_get_config(win)
+      if config.relative ~= "" and not config.hide then
+        local info = vim.fn.getwininfo(win)[1]
+        floats[#floats + 1] = table.concat({win, info.winrow, info.wincol, info.width, info.height, config.zindex or 50}, ":")
+      end
+    end
+    local layout = table.concat(floats, ";")
+    if layout ~= float_layout then
+      float_layout = layout
+      -- WhichKey suppresses window events while creating its popup.
+      api.refresh()
+    end
+  end,
+})
 
 api.render = function(id)
   if not images[id] then return end

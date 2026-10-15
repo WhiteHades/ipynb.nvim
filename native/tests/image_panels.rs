@@ -146,6 +146,37 @@ assert(placements == before_popup and not plot.is_rendered, 'popup must stay abo
 vim.api.nvim_win_close(popup, true)
 assert(vim.wait(1000, function() return placements > before_popup end, 5), 'closing popup must restore graphics')
 
+local framed = plot_api.from_file('frame.png', {id='stable-frame', buffer=buf, window=win,
+  frame={x=3,y=2,width=8,height=3,bounds={left=3,right=11,top=2,bottom=4}}})
+local before_frame = placements
+plot_api.render(framed)
+assert(vim.wait(1000, function() return placements > before_frame end, 5))
+local frame, placed = plot, placements
+frame:render(); frame:render()
+assert(placements == placed, 'unchanged pixel borders must not resend Kitty placements')
+frame:clear(); frame:render()
+assert(placements == placed + 1, 'a cleared border must still render again')
+local toast = vim.api.nvim_open_win(popup_buf, false, {
+  relative='editor', row=7, col=5, width=10, height=1, zindex=200,
+})
+local clear_toast = clears
+frame:render()
+assert(clears == clear_toast and frame.is_rendered, 'distant notifications must not hide an entire notebook')
+vim.api.nvim_win_close(toast, true)
+local covering = vim.api.nvim_open_win(popup_buf, false, {
+  relative='editor', row=2, col=3, width=4, height=2, zindex=200, noautocmd=true,
+})
+vim.cmd('redraw')
+assert(vim.wait(1000, function() return not frame.is_rendered end, 5),
+  'popups that suppress window events must remain above pixel borders')
+vim.api.nvim_win_set_config(covering, {hide=true})
+vim.cmd('redraw')
+assert(vim.wait(1000, function() return frame.is_rendered end, 5),
+  'hiding a popup without window events must restore notebook graphics')
+vim.api.nvim_win_close(covering, true)
+frame:render()
+assert(frame.is_rendered, 'closing the overlapping popup must restore the border')
+
 local medium = plot_api.from_file('medium.png', {
   id='medium', buffer=buf, window=win, render_offset_top=1, max_width=80, max_height=40,
 })

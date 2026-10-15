@@ -328,6 +328,7 @@ local function activate_notebook_buffer(bufnr)
     return
   end
 
+  ensure_notebook_rendering(bufnr)
   vim.api.nvim_buf_call(bufnr, function()
     local otter = require("otter")
     local embedded = vim.fn.bufnr(vim.api.nvim_buf_get_name(bufnr) .. ".otter.py")
@@ -338,9 +339,6 @@ local function activate_notebook_buffer(bufnr)
     end
   end)
 
-  vim.schedule(function()
-    ensure_notebook_rendering(bufnr)
-  end)
   set_notebook_keymaps(bufnr)
   if M.options.auto_init then ensure_notebook_kernel(bufnr) end
 end
@@ -458,10 +456,12 @@ function M.setup(opts)
     -- image.nvim updates terminal cell pixels in this same event.
     vim.schedule(function()
       for _, win in ipairs(vim.api.nvim_list_wins()) do
-        local buf = vim.api.nvim_win_get_buf(win)
-        if is_ipynb_buffer(buf) then
-          require("ipynb.markdown").refresh(buf)
-          require("ipynb.native_ui").refresh(buf)
+        if vim.api.nvim_win_is_valid(win) then
+          local buf = vim.api.nvim_win_get_buf(win)
+          if is_ipynb_buffer(buf) then
+            require("ipynb.markdown").refresh(buf)
+            require("ipynb.native_ui").refresh(buf)
+          end
         end
       end
     end)

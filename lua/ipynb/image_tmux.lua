@@ -2,6 +2,18 @@ local M = {}
 local loaded, tmux = pcall(require, "image/utils/tmux")
 local offset
 
+if loaded and tmux.is_tmux and tmux.get_pane_tty then
+  local get_tty, tty, queried = tmux.get_pane_tty, nil, false
+  tmux.get_pane_tty = function()
+    if not queried then
+      tty, queried = get_tty(), true
+      -- All clears in this batch target the same active pane; recheck next turn.
+      vim.schedule(function() tty, queried = nil, false end)
+    end
+    return tty
+  end
+end
+
 -- image.nvim already adds pane_left/pane_top. Passthrough coordinates also
 -- include top status rows, which tmux omits from pane_top.
 function M.top_offset()

@@ -220,7 +220,12 @@ local function refresh(buf, force, cursor_only)
     state.selected_id = selected_id
   end
   local changedtick = vim.api.nvim_buf_get_changedtick(buf)
-  if cursor_only and state.changedtick == changedtick then return end
+  if cursor_only and state.changedtick == changedtick then
+    for _, cell in ipairs(state.order) do
+      if cell.ui.float and valid_win(cell.ui.float.win) then output.render_float(cell, false) end
+    end
+    return
+  end
   for _, cell in ipairs(state.order) do
     output.show_virtual(cell, force)
     if cell.ui.float and valid_win(cell.ui.float.win) then output.render_float(cell, false) end
