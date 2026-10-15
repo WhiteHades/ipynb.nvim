@@ -326,11 +326,11 @@ function M.sync(buf, cells)
       if state.selected_id == id then state.selected_id = nil end
     end
   end
-  table.sort(order, function(left, right)
-    local left_pos = extmark_position(buf, left.ui.begin_mark) or normalize_position(left.data.begin)
-    local right_pos = extmark_position(buf, right.ui.begin_mark) or normalize_position(right.data.begin)
-    return position_before(left_pos, right_pos)
-  end)
+  local positions = {}
+  for _, cell in ipairs(order) do
+    positions[cell] = extmark_position(buf, cell.ui.begin_mark) or normalize_position(cell.data.begin)
+  end
+  table.sort(order, function(left, right) return position_before(positions[left], positions[right]) end)
   state.order = order
   if #order == 0 then
     for _, win in ipairs(vim.fn.win_findbuf(buf)) do rich.image_canvas(win, false) end

@@ -544,6 +544,21 @@ local moved_marks = vim.api.nvim_buf_get_extmarks(large, vim.api.nvim_get_namesp
 for index, mark in ipairs(moved_marks) do
   assert(mark[2] == index * 4 - 1, "editing must invalidate cached anchors and move every output")
 end
+local shuffled = {}
+for index = #many, 1, -1 do shuffled[#shuffled + 1] = many[index] end
+local sync_position_queries, get_sync_position = 0, vim.api.nvim_buf_get_extmark_by_id
+vim.api.nvim_buf_get_extmark_by_id = function(...)
+  sync_position_queries = sync_position_queries + 1
+  return get_sync_position(...)
+end
+ui.sync(large, shuffled)
+vim.api.nvim_buf_get_extmark_by_id = get_sync_position
+assert(sync_position_queries < #many * 10,
+  "sync position reads must stay linear as cell count grows")
+for index, synchronized in ipairs(ui.cells(large)) do
+  assert(synchronized.id == index + 500 and synchronized.begin[1] == (index - 1) * 4 + 2,
+    "sync must sort shuffled cells by their moved source anchors")
+end
 vim.api.nvim_win_set_cursor(0, { 399, 0 })
 assert(ui.current(large).id == 600, "editing must preserve the selected cell identity")
 ui.clear(large)
