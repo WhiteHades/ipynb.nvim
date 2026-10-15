@@ -1,10 +1,15 @@
 <p align="center"><img src="assets/logo.svg" width="112" alt="ipynb.nvim logo"></p>
 
-# ipynb.nvim
+<h1 align="center">ipynb.nvim</h1>
 
-[Jupyter](https://jupyter.org/) notebooks in [Neovim](https://neovim.io). Edit cells, run code, and view plots in your terminal.
+<p align="center"><a href="https://jupyter.org/">Jupyter</a> notebooks in <a href="https://neovim.io">Neovim</a>. Edit cells, run code, and view plots in your terminal.</p>
 
-[Latest release](https://github.com/WhiteHades/ipynb.nvim/releases) | [Neovim 0.12 or newer](https://neovim.io) | [GPL 3.0](LICENSE)
+<p align="center">
+  <a href="https://github.com/WhiteHades/ipynb.nvim/releases/latest"><img src="https://img.shields.io/github/v/release/WhiteHades/ipynb.nvim?label=latest%20release" alt="Latest release"></a>
+  <a href="https://neovim.io"><img src="https://img.shields.io/badge/Neovim-0.12%2B-57A143?logo=neovim&logoColor=white" alt="Neovim 0.12 or newer"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/WhiteHades/ipynb.nvim?label=GPL-3.0" alt="GPL 3.0 license"></a>
+  <a href="https://jupyter.org/"><img src="https://img.shields.io/badge/Jupyter-notebooks-F37626?logo=jupyter&logoColor=white" alt="Jupyter notebooks"></a>
+</p>
 
 <p align="center"><a href="assets/notebook.png"><img src="assets/notebook.png" alt="Python cells, text output, and a plot in a fullscreen notebook" width="900"></a></p>
 
@@ -30,30 +35,6 @@ return {
 
 Run `:Lazy sync`, then `:IpynbInstall` and restart Neovim.
 See [installation details](doc/install.md) for system requirements and image setup.
-
-## LazyVim integrations
-
-The required plugins below are declared in the spec above.
-
-| Plugin | Use |
-| --- | --- |
-| [jupytext.nvim](https://github.com/goerz/jupytext.nvim) | Read and write notebook files. |
-| [quarto.nvim](https://github.com/quarto-dev/quarto-nvim) | Required by the notebook setup. |
-| [otter.nvim](https://github.com/jmbuhr/otter.nvim) | Provides embedded code buffers for language tools. |
-| [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) | Install the Markdown and Python parsers. |
-| [image.nvim](https://github.com/3rd/image.nvim) | Render plots with the default image provider. |
-
-The following integrations are optional and use your existing plugin settings.
-
-| Plugin | Use |
-| --- | --- |
-| [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) | Render notebook prose with your Markdown settings. |
-| [conform.nvim](https://github.com/stevearc/conform.nvim) and [Neovim](https://neovim.io) LSP formatters | Format each code cell on save. |
-| [nvim-lint](https://github.com/mfussenegger/nvim-lint) | Run configured linters and show diagnostics through Otter. |
-| [snacks.nvim](https://github.com/folke/snacks.nvim) | Render floating plots; inline plots use [image.nvim](https://github.com/3rd/image.nvim). |
-| [blink.cmp](https://github.com/saghen/blink.cmp) | Close completion menus when notebook insert mode ends. |
-| [gitsigns.nvim](https://github.com/lewis6991/gitsigns.nvim) | Skip signs in notebook buffers. |
-| [mini.hipatterns](https://github.com/nvim-mini/mini.hipatterns) | Keep inline color previews readable over cell backgrounds. |
 
 ## Use
 
