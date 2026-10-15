@@ -17,7 +17,36 @@ vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
   "```",
 })
 
+local display_options = { "conceallevel", "concealcursor", "foldexpr", "foldtext" }
+local function settings(scope)
+  local result = {}
+  for _, name in ipairs(display_options) do
+    result[name] = vim.api.nvim_get_option_value(name, { scope = scope })
+  end
+  return result
+end
+local global_display = settings("global")
+local ordinary_display = settings("local")
 markdown.enable(buffer)
+assert(vim.deep_equal(settings("global"), global_display), "notebook display must not change editor defaults")
+local ordinary = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(ordinary, vim.fn.tempname() .. ".md")
+vim.api.nvim_buf_set_lines(ordinary, 0, -1, false, { "# Ordinary heading", "", "```python", 'color = "#ee4c3c"', "```" })
+vim.api.nvim_set_current_buf(ordinary)
+assert(vim.deep_equal(settings("local"), ordinary_display), "ordinary files must not inherit notebook display settings")
+assert(#vim.api.nvim_buf_get_extmarks(ordinary, namespace, 0, -1, {}) == 0,
+  "ordinary headings and hex colors must not receive notebook decorations")
+vim.api.nvim_set_current_buf(buffer)
+markdown.enable(buffer)
+local notebook_window = vim.api.nvim_get_current_win()
+local notebook_display = settings("local")
+vim.cmd("vsplit")
+vim.api.nvim_set_current_buf(ordinary)
+assert(vim.deep_equal(settings("local"), ordinary_display), "a split must not leak notebook display settings")
+vim.api.nvim_set_current_win(notebook_window)
+assert(vim.deep_equal(settings("local"), notebook_display), "focus changes must preserve visible notebook rendering")
+vim.cmd("only")
+vim.api.nvim_buf_delete(ordinary, { force = true })
 local first_tick = vim.api.nvim_buf_get_changedtick(buffer)
 local first_marks = vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, { details = true })
 assert(#first_marks > 0)
@@ -169,7 +198,9 @@ vim.b[metadata].ipynb_read_kernel = "python3"
 vim.wo.foldmethod, vim.wo.foldenable, vim.wo.foldlevel, vim.wo.foldexpr = "expr", true, 0, "0"
 local original_foldtext = vim.wo.foldtext
 vim.wo.foldtext = ""
+local metadata_display, metadata_global = settings("local"), settings("global")
 markdown.enable(metadata)
+assert(vim.deep_equal(settings("global"), metadata_global), "notebook metadata folds must not change editor defaults")
 assert(vim.fn.foldclosed(1) == 1, "frontmatter should start folded into one summary row")
 assert(vim.fn.foldtextresult(1):find("Kernel: python3", 1, true), "summary should use a short kernel label")
 vim.cmd("silent! normal! zo")
@@ -181,6 +212,15 @@ assert(concealed[1] == 0, "expanded frontmatter delimiters must remain visible a
 assert(vim.deep_equal(vim.api.nvim_buf_get_lines(metadata, 0, -1, false), metadata_lines),
   "compacting frontmatter must preserve unknown metadata text")
 markdown.disable(metadata)
+assert(vim.deep_equal(settings("local"), metadata_display), "disabling notebook rendering must restore window settings")
+markdown.enable(metadata)
+local metadata_window = vim.api.nvim_get_current_win()
+vim.cmd("vsplit")
+markdown.disable(metadata)
+assert(vim.deep_equal(settings("local"), metadata_display), "disabling rendering must restore an inherited split")
+vim.api.nvim_set_current_win(metadata_window)
+assert(vim.deep_equal(settings("local"), metadata_display), "disabling rendering must restore the original window")
+vim.cmd("only")
 vim.wo.foldtext = original_foldtext
 vim.api.nvim_buf_delete(metadata, { force = true })
 if #vim.api.nvim_list_uis() > 0 then

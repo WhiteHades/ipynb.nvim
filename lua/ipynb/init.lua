@@ -73,7 +73,6 @@ local function ensure_notebook_rendering(bufnr)
 
   vim.bo[bufnr].swapfile = false
   if vim.bo[bufnr].filetype ~= "markdown" then vim.bo[bufnr].filetype = "markdown" end
-  vim.wo.conceallevel = 3
   pcall(require("ipynb.markdown").start_highlight, bufnr)
 
   local render_ok, render = pcall(require, "render-markdown")

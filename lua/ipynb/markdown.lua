@@ -2,6 +2,15 @@ local M = {}
 
 local namespace = vim.api.nvim_create_namespace("ipynb-markdown")
 local highlight_query
+local window_options = {}
+local display_options = { "conceallevel", "concealcursor", "foldexpr", "foldtext" }
+
+local function restore_window(win, buf)
+  local saved = window_options[win]
+  if not saved or saved.buf ~= buf then return end
+  for _, option in ipairs(display_options) do vim.wo[win][0][option] = saved[option] end
+  window_options[win] = nil
+end
 
 function M.start_highlight(buf)
   local active = vim.treesitter.highlighter.active[buf]
@@ -184,7 +193,7 @@ local function metadata_fold(bufnr, close)
       if method ~= "expr" and method ~= "manual" then return end
       local expression = "v:lua.require'ipynb.markdown'.foldexpr("
       if method == "expr" and vim.wo.foldexpr:sub(1, #expression) ~= expression then
-        vim.wo.foldexpr = expression .. vim.fn.string(vim.wo.foldexpr) .. ")"
+        vim.wo[0][0].foldexpr = expression .. vim.fn.string(vim.wo.foldexpr) .. ")"
       elseif vim.wo.foldmethod == "manual" and vim.fn.foldlevel(1) == 0 then
         vim.cmd(("silent 1,%dfold"):format(last))
       end
@@ -192,7 +201,7 @@ local function metadata_fold(bufnr, close)
       if vim.fn.foldlevel(1) == 0 then return end
       local text = "v:lua.require'ipynb.markdown'.foldtext("
       if vim.wo.foldtext:sub(1, #text) ~= text then
-        vim.wo.foldtext = text .. vim.fn.string(vim.wo.foldtext) .. ")"
+        vim.wo[0][0].foldtext = text .. vim.fn.string(vim.wo.foldtext) .. ")"
       end
       if close then vim.cmd("silent! 1foldclose") else vim.cmd("silent! 1foldopen") end
     end)
@@ -344,8 +353,13 @@ function M.enable(bufnr)
     return
   end
   for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
-    vim.wo[win].conceallevel = 3
-    vim.wo[win].concealcursor = "nic"
+    if not window_options[win] or window_options[win].buf ~= bufnr then
+      local saved = { buf = bufnr }
+      for _, option in ipairs(display_options) do saved[option] = vim.wo[win][0][option] end
+      window_options[win] = saved
+    end
+    vim.wo[win][0].conceallevel = 3
+    vim.wo[win][0].concealcursor = "nic"
   end
 
   if vim.b[bufnr].ipynb_markdown_enabled ~= true then
@@ -389,8 +403,7 @@ function M.disable(bufnr)
   vim.b[bufnr].ipynb_markdown_active_last = nil
   vim.b[bufnr].ipynb_markdown_syntax_state = nil
   for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
-    vim.wo[win].conceallevel = 0
-    vim.wo[win].concealcursor = ""
+    restore_window(win, bufnr)
   end
   vim.api.nvim_buf_call(bufnr, function()
     for _, group in ipairs(syntax_groups) do
@@ -400,6 +413,17 @@ function M.disable(bufnr)
 end
 
 local cursor_group = vim.api.nvim_create_augroup("ipynb-markdown-cursor", { clear = true })
+vim.api.nvim_create_autocmd("WinNew", { group = cursor_group, callback = function()
+  local win = vim.api.nvim_get_current_win()
+  local previous = vim.fn.win_getid(vim.fn.winnr("#"))
+  local saved = window_options[previous]
+  if saved and saved.buf == vim.api.nvim_win_get_buf(win) then
+    window_options[win] = saved
+  end
+end })
+vim.api.nvim_create_autocmd("WinClosed", { group = cursor_group, callback = function(ev)
+  window_options[tonumber(ev.match)] = nil
+end })
 vim.api.nvim_create_autocmd({ "CursorMovedI", "ModeChanged" }, { group = cursor_group, callback = function(ev)
   if vim.b[ev.buf].ipynb_markdown_enabled == true then M.refresh(ev.buf) end
 end })
