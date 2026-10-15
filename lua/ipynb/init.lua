@@ -433,6 +433,10 @@ end
 
 function M.setup(opts)
   M.init(opts)
+  vim.filetype.add({ pattern = { [".*%.ipynb"] = function(_, buf)
+    -- Quickfile detection must not replace the converted Markdown parser with JSON.
+    if buf and buf >= 0 and vim.b[buf].notebook_markdown then return vim.bo[buf].filetype end
+  end } })
   vim.api.nvim_create_user_command("IpynbInstall", M.install, { desc = "Check prerequisites and install notebook tools" })
   require("jupytext").setup({
     jupytext = M.options.jupytext,

@@ -47,6 +47,10 @@ See [configuration and saving](doc/ipynb.txt) for settings and standalone enviro
 
 [PyTorch](https://github.com/pytorch/pytorch) can use CUDA in your project kernel; notebook code selects GPU or CPU.
 
+## Editor plugins
+
+Works with [Snacks quickfile](https://github.com/folke/snacks.nvim), [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim), [blink.cmp](https://github.com/saghen/blink.cmp), [conform.nvim](https://github.com/stevearc/conform.nvim), and [nvim-lint](https://github.com/mfussenegger/nvim-lint).
+
 ## Help
 
 Run `:checkhealth ipynb` to check setup or `:IpynbInstall` to repair it.

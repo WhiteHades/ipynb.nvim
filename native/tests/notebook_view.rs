@@ -43,6 +43,12 @@ local ok, err = xpcall(function()
   local initial_gutter = gutter()
   local markdown = require('ipynb.markdown')
   local highlighter = assert(vim.treesitter.highlighter.active[buf])
+  assert(vim.filetype.match({buf=buf}) == 'markdown', 'quickfile detection must respect converted notebook text')
+  vim.treesitter.start(buf, vim.treesitter.language.get_lang(vim.filetype.match({buf=buf})))
+  assert(vim.treesitter.highlighter.active[buf] == highlighter,
+    'quickfile must not replace notebook highlighting with a JSON parser')
+  assert(vim.filetype.match({filename='ordinary.py'}) == 'python')
+  assert(vim.filetype.match({filename='unloaded.ipynb'}) == 'json')
   local highlight_query = highlighter:get_query('markdown'):query()
   local tree = assert(vim.treesitter.get_parser(buf, 'markdown'):parse()[1])
   for capture, _, metadata in highlight_query:iter_captures(tree:root(), buf) do
