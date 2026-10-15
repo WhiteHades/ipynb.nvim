@@ -32,7 +32,9 @@ function M.refresh(buf)
         or cell.status == "new" and "Ready" or cell.success == false and "Failed"
         or cell.old and "Previous" or cell.status == "done" and "Done" or "Ready"
       local visible = false
-      for _, win in ipairs(wins) do if vim.fn.screenpos(win, row + 1, 1).row > 0 then visible = true; break end end
+      if label == "Running" and animate then
+        for _, win in ipairs(wins) do if vim.fn.screenpos(win, row + 1, 1).row > 0 then visible = true; break end end
+      end
       local moving = label == "Running" and animate and visible
       if moving then
         label = frames[math.floor(vim.uv.hrtime() / 120000000) % #frames + 1] .. " " .. label

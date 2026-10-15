@@ -76,6 +76,22 @@ markdown.refresh(buffer)
 local cells = require("ipynb.cells")
 local native_ui = require("ipynb.native_ui")
 local cell_header = require("ipynb.cell_header")
+local headers, screenpos = native_ui.cell_headers, vim.fn.screenpos
+local animations, visibility_queries = vim.g.ipynb_animations, 0
+native_ui.cell_headers = function()
+  return { { row = 0, status = "done" }, { row = 4, status = "running" } }
+end
+vim.fn.screenpos = function(...)
+  visibility_queries = visibility_queries + 1
+  return screenpos(...)
+end
+vim.g.ipynb_animations = false
+cell_header.refresh(buffer)
+local header_marks = vim.api.nvim_buf_get_extmarks(buffer,
+  vim.api.nvim_get_namespaces()["ipynb-cell-header"], 0, -1, { details = true })
+assert(#header_marks == 2, "static headers must remain visible when animation is disabled")
+assert(visibility_queries == 0, "static labels must not query every cell's screen position")
+native_ui.cell_headers, vim.fn.screenpos, vim.g.ipynb_animations = headers, screenpos, animations
 local original_current, original_ui_current, original_get_mode = cells.current, native_ui.current, vim.api.nvim_get_mode
 local original_header_refresh, header_refreshes = cell_header.refresh, 0
 cell_header.refresh = function() header_refreshes = header_refreshes + 1 end
