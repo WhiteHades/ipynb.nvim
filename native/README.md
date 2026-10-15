@@ -23,11 +23,11 @@ Both Python environments need `ipykernel`. Build and run from the repository roo
 
 ```sh
 cargo build --release --locked --manifest-path native/Cargo.toml
-cargo test --manifest-path native/Cargo.toml --test notebook_view --test project_workflow -- --ignored
+cargo test --release --locked --manifest-path native/Cargo.toml --test notebook_view --test project_workflow -- --ignored
 ```
 
 With ImageMagick 7, also check plot scaling and transparent corners:
 
 ```sh
-cargo test --manifest-path native/Cargo.toml --test image_kitty -- --include-ignored
+cargo test --release --locked --manifest-path native/Cargo.toml --test image_kitty -- --include-ignored
 ```
