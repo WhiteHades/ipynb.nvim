@@ -57,6 +57,18 @@ local id = plot_api.from_file('plot.png', {
 plot_api.image_size(id)
 plot_api.render(id)
 assert(vim.wait(1000, function() return placements > 0 end, 5), 'visible plot must render')
+vim.wait(20)
+local schedule, pending = vim.schedule, {}
+vim.schedule = function(callback) pending[#pending + 1] = callback end
+for _ = 1, 100 do
+  vim.api.nvim_exec_autocmds('WinScrolled', {group='ipynb_image_placements', modeline=false})
+end
+vim.schedule = schedule
+assert(#pending == 1, 'scroll events must share one pending image frame, not queue another refresh each')
+local before_scroll, clear_before_scroll = placements, clears
+pending[1]()
+assert(placements > before_scroll, 'the next image frame must apply the current placement')
+assert(clears == clear_before_scroll, 'scroll callbacks must not pass their event table as a forced refresh')
 local visible_placements, visible_clears = placements, clears
 assert(style_releases == 0, 'accepted styled images must retain their cache lease while visible')
 tmux_offset = nil

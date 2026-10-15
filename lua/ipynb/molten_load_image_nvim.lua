@@ -379,7 +379,7 @@ end
 vim.api.nvim_create_autocmd({ "WinScrolled", "WinNew", "WinClosed", "WinResized", "BufWinEnter", "FocusGained", "TabEnter" }, {
   group = vim.api.nvim_create_augroup("ipynb_image_placements", { clear = true }),
   callback = function()
-    vim.schedule(api.refresh)
+    api.refresh()
   end,
 })
 
