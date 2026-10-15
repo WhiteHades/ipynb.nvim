@@ -241,8 +241,9 @@ local function refresh(buf, force, cursor_only)
     end
     return
   end
+  local context = {}
   for _, cell in ipairs(state.order) do
-    output.show_virtual(cell, force)
+    output.show_virtual(cell, force, context)
     if cell.ui.float and valid_win(cell.ui.float.win) then output.render_float(cell, false) end
   end
   require("ipynb.cell_header").refresh(buf)

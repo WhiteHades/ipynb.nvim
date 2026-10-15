@@ -161,27 +161,48 @@ return function(state, rich)
     return 0
   end
 
-  function M.show_virtual(cell, force)
+  function M.show_virtual(cell, force, context)
     if not state.options.virt_text_output or cell.ui.hidden or (cell.ui.float and valid_win(cell.ui.float.win)) then
+      if context then context.geometry = nil end
       M.clear_virtual(cell)
       return
     end
     local end_pos = output_end(cell)
     if not end_pos then return end
-    local win = source_window(cell.buf)
+    local geometry = context and context.geometry
+    if geometry and not valid_win(geometry.win) then
+      context.geometry, geometry = nil, nil
+    end
+    local win = geometry and geometry.win or source_window(cell.buf)
     if not valid_win(win) then return end
-    local info = vim.fn.getwininfo(win)[1]
+    local info = geometry and geometry.info or vim.fn.getwininfo(win)[1]
     if not info then return end
     local width = info.width - info.textoff
-    if width < 1 then M.clear_virtual(cell) return end
+    if width < 1 then
+      if context then context.geometry = nil end
+      M.clear_virtual(cell)
+      return
+    end
     local anchor = { line = end_pos.line + cover_offset(cell.buf, end_pos), col = 0 }
     local count = vim.api.nvim_buf_line_count(cell.buf)
     if state.options.virt_lines_off_by_1 and anchor.line < count - 1 then anchor.line = anchor.line + 1 end
     anchor.line = math.max(0, math.min(anchor.line, math.max(0, count - 1)))
-    local api = rich.provider()
-    local layout = api.layout_key and api.layout_key() or {}
-    local key = table.concat({ cell.revision, state.config_revision, win, anchor.line, width, info.height, vim.inspect(layout) }, ":")
-    if not force and cell.ui.virt_mark and cell.ui.virt_key == key then return end
+    local api = geometry and geometry.api or rich.provider()
+    local layout = geometry and geometry.layout or vim.inspect(api.layout_key and api.layout_key() or {})
+    local key = table.concat({ cell.revision, state.config_revision, win, anchor.line, width, info.height, layout }, ":")
+    if not force and cell.ui.virt_mark and cell.ui.virt_key == key then
+      if context and not geometry then
+        local after_win = source_window(cell.buf)
+        local after = valid_win(after_win) and vim.fn.getwininfo(after_win)[1]
+        if after_win == win and after and after.width == info.width
+          and after.textoff == info.textoff and after.height == info.height then
+          context.geometry = { win = win, info = info, api = api, layout = layout }
+        end
+      end
+      return
+    end
+    -- Provider rendering may process resize or focus events before the next cell.
+    if context then context.geometry = nil end
     local lines = rich.render_body(cell, {
       row = anchor.line,
       padding_top = 1,

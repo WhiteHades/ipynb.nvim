@@ -609,15 +609,43 @@ ui.sync(large, many)
 collectgarbage("collect")
 collectgarbage("stop")
 local heap = collectgarbage("count")
+local window_queries, get_window_info = 0, vim.fn.getwininfo
+vim.fn.getwininfo = function(...)
+  window_queries = window_queries + 1
+  return get_window_info(...)
+end
 ui.refresh(large)
+vim.fn.getwininfo = get_window_info
 local allocated = collectgarbage("count") - heap
 collectgarbage("restart")
 assert(allocated < 1024, ("one refresh copied code spans per output: %.0f KiB allocated"):format(allocated))
+assert(window_queries <= 3, "unchanged outputs must share window geometry within one refresh")
 local output_marks = vim.api.nvim_buf_get_extmarks(large, vim.api.nvim_get_namespaces()["ipynb-native-output"], 0, -1, {})
 assert(#output_marks == 100)
 for index, mark in ipairs(output_marks) do
   assert(mark[2] == (index - 1) * 4 + 2, "every output must follow its own closing fence")
 end
+local width, rendered_widths = get_window_info(vim.api.nvim_get_current_win())[1].width, {}
+local set_mark = vim.api.nvim_buf_set_extmark
+vim.fn.getwininfo = function(...)
+  local info = get_window_info(...)
+  info[1].width = width
+  return info
+end
+vim.api.nvim_buf_set_extmark = function(target, ns, row, col, opts)
+  local id = set_mark(target, ns, row, col, opts)
+  if target == large and opts.virt_lines then
+    rendered_widths[row] = #opts.virt_lines[1][1][1]
+    if row == 6 then width = width - 12 end
+  end
+  return id
+end
+many[2].lines = { "changed output" }
+ui.sync(large, many)
+vim.fn.getwininfo, vim.api.nvim_buf_set_extmark = get_window_info, set_mark
+assert(rendered_widths[10] == rendered_widths[6] - 12,
+  "render callbacks changing window geometry must invalidate it before the next output")
+ui.refresh(large)
 vim.api.nvim_win_set_cursor(0, { 398, 0 })
 ui.refresh(large, true)
 local position_queries, get_position = 0, vim.api.nvim_buf_get_extmark_by_id
