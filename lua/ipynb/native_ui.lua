@@ -200,13 +200,28 @@ local function refresh(buf, force, cursor_only)
   if not state or not valid_buf(buf) then return end
   state.layout_known_spans = nil
   pcall(vim.api.nvim_buf_clear_namespace, buf, highlight_ns, 0, -1)
+  local changedtick = vim.api.nvim_buf_get_changedtick(buf)
+  local positions
+  if cursor_only and state.changedtick == changedtick then
+    state.cursor_positions = state.cursor_positions or {}
+    positions = state.cursor_positions
+  else
+    state.cursor_positions = nil
+  end
   local selected = nil
   local win = source_window(buf)
   if valid_win(win) then
     local cursor = vim.api.nvim_win_get_cursor(win)
     local position = { line = cursor[1] - 1, col = cursor[2] }
     for _, cell in ipairs(state.order) do
-      local begin_pos, end_pos = current_positions(cell)
+      local cached = positions and positions[cell]
+      local begin_pos, end_pos
+      if cached then
+        begin_pos, end_pos = cached[1], cached[2]
+      else
+        begin_pos, end_pos = current_positions(cell)
+        if positions then positions[cell] = { begin_pos, end_pos } end
+      end
       if begin_pos and end_pos and contains_cursor(buf, position, begin_pos, end_pos) then
         selected = cell
         break
@@ -220,7 +235,6 @@ local function refresh(buf, force, cursor_only)
     if not state.selected_id and selected and view.options.auto_open_output then output.render_float(selected, false) end
     state.selected_id = selected_id
   end
-  local changedtick = vim.api.nvim_buf_get_changedtick(buf)
   if cursor_only and state.changedtick == changedtick then
     for _, cell in ipairs(state.order) do
       if cell.ui.float and valid_win(cell.ui.float.win) then output.render_float(cell, false) end

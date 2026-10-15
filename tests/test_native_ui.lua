@@ -528,6 +528,24 @@ assert(#output_marks == 100)
 for index, mark in ipairs(output_marks) do
   assert(mark[2] == (index - 1) * 4 + 2, "every output must follow its own closing fence")
 end
+vim.api.nvim_win_set_cursor(0, { 398, 0 })
+ui.refresh(large, true)
+local position_queries, get_position = 0, vim.api.nvim_buf_get_extmark_by_id
+vim.api.nvim_buf_get_extmark_by_id = function(...)
+  position_queries = position_queries + 1
+  return get_position(...)
+end
+for _ = 1, 5 do ui.refresh(large, true) end
+vim.api.nvim_buf_get_extmark_by_id = get_position
+assert(position_queries == 0, "unchanged cursor refresh must reuse source anchors")
+vim.api.nvim_buf_set_lines(large, 0, 0, false, { "# inserted" })
+ui.refresh(large, true)
+local moved_marks = vim.api.nvim_buf_get_extmarks(large, vim.api.nvim_get_namespaces()["ipynb-native-output"], 0, -1, {})
+for index, mark in ipairs(moved_marks) do
+  assert(mark[2] == index * 4 - 1, "editing must invalidate cached anchors and move every output")
+end
+vim.api.nvim_win_set_cursor(0, { 399, 0 })
+assert(ui.current(large).id == 600, "editing must preserve the selected cell identity")
 ui.clear(large)
 vim.api.nvim_buf_delete(large, { force = true })
 local grid = vim.api.nvim_create_buf(false, true)
