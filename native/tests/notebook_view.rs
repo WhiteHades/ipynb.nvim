@@ -479,6 +479,11 @@ local ok, err = xpcall(function()
   assert(not pcall(vim.cmd, 'write'), 'external changes must still block save')
   assert(vim.bo[saved_buf].modified and table.concat(vim.fn.readfile(relative), '\n') == external,
     'a real conflict must preserve disk and unsaved edits')
+  local recovery = relative .. '.recovery.ipynb'
+  vim.cmd('write ' .. vim.fn.fnameescape(recovery))
+  local recovered_copy = vim.json.decode(table.concat(vim.fn.readfile(recovery), '\n'))
+  assert(table.concat(recovered_copy.cells[2].source):find('# unsaved local edit', 1, true), 'recovery copy lost local edits')
+  assert(table.concat(vim.fn.readfile(relative), '\n') == external, 'recovery copy overwrote the conflicted notebook')
   vim.cmd('edit!')
   vim.cmd('write')
   assert(vim.deep_equal(vim.b[saved_buf].mtime, vim.uv.fs_stat(relative).mtime), 'reload did not recover saving')
