@@ -11,17 +11,22 @@ fn notebook_kitty_placements_preserve_geometry_and_coalesce_frame_completion() {
     let report = fixture.path().join("report.json");
     fs::write(&script, r#"
 vim.opt.rtp:prepend(vim.env.IPYNB_TEST_ROOT)
-local writes, deferred, counts, loads, finishes = {}, {}, {}, 0, 0
+local writes, sent, deferred, counts, loads, finishes, graphics_fallbacks = {}, {}, {}, {}, 0, 0, {}
+vim.api.nvim_list_uis = function() return {{stdout_tty=true}} end
+vim.api.nvim_ui_send = function(value) sent[#sent + 1] = value end
 local completions = {}
 local helpers = {
   write_graphics_at = function(config, x, y)
     writes[#writes + 1] = {config=vim.deepcopy(config), x=x, y=y}
     return 'sent'
   end,
+  write_graphics = function(config) graphics_fallbacks[#graphics_fallbacks + 1] = config; return 'delegated' end,
   update_sync_end = function() finishes = finishes + 1 end,
 }
 
 package.preload['image/backends/kitty/helpers'] = function() loads = loads + 1; return helpers end
+package.preload['image/backends/kitty/codes'] = function() return {control={keys={action='a',image_id='i',transmit_medium='t',display_width='w',display_height='h',display_x='x',display_y='y',display_columns='c',display_rows='r',display_zindex='z'},transmit_medium={file='f'}}} end
+package.preload['image/utils/tmux'] = function() return {is_tmux=false,escape=function(value) return value end} end
 vim.defer_fn = function(callback, delay) deferred[#deferred + 1] = {callback=callback, delay=delay} end
 vim.schedule = function(callback) completions[#completions + 1] = callback end
 local cold = package.loaded['image/backends/kitty/helpers'] == nil
@@ -31,6 +36,9 @@ bridge.track(img, {get_size=function() return {cell_width=8, cell_height=16} end
 bridge.track(img, {get_size=function() return {cell_width=8, cell_height=16} end})
 local config = {action='p', image_id=7, display_width=320, display_height=320, display_x=8, display_y=16}
 local result = helpers.write_graphics_at(config, 4, 6)
+helpers.write_graphics({action='t', image_id=7, transmit_medium='f'}, '/tmp/a.png', 4)
+helpers.write_graphics({action='d', image_id=7})
+helpers.write_graphics({action='t', image_id=7, transmit_medium='d'}, '/tmp/direct.png')
 counts[#counts + 1] = #deferred
 local other = vim.tbl_extend('force', config, {image_id=8})
 helpers.write_graphics_at(other, 1, 2)
@@ -49,10 +57,11 @@ local warnings = {}
 vim.notify = function(message) warnings[#warnings + 1] = message end
 local unsupported = require('ipynb.image_kitty')
 local survived, failure = pcall(function() unsupported.track(img, {}); unsupported.track(img, {}) end)
-vim.fn.writefile({vim.json.encode({cold=cold, loads=loads, writes=writes, original=config,
+vim.fn.writefile({vim.json.encode({cold=cold, loads=loads, writes=writes, sent=sent, graphics_fallbacks=graphics_fallbacks, original=config,
   other=other, result=result, counts=counts, delays=delays, before=before, finishes=finishes,
   survived=survived, failure=failure, warnings=warnings})}, vim.env.IPYNB_TEST_REPORT)
 -- Keep tmux variants in this transport smoke check, not a separate Lua runner.
+vim.api.nvim_list_uis = function() return {} end
 package.loaded['ipynb.image_kitty'], package.loaded['ipynb.image_tmux'] = nil, nil
 local tty, tty_queries = '/dev/pts/1', 0
 local tmux, queries, scheduled = {is_tmux=true, get_pane_tty=function()
@@ -63,7 +72,7 @@ local reply = '1 1 1 top on 40 0\n'
 package.preload['image/utils/tmux'] = function() return tmux end
 package.loaded['image/utils/tmux'] = nil
 local last, count = nil, 0
-helpers = {update_sync_end=function() end, write_graphics_at=function(value, x, y)
+helpers = {update_sync_end=function() end, write_graphics=function() end, write_graphics_at=function(value, x, y)
   last = {config=value, x=x + (tmux.is_tmux and 12 or 0), y=y + (tmux.is_tmux and 7 or 0)}
   count = count + 1
   return 'sent'
@@ -116,6 +125,22 @@ assert(last.x == 4 and last.y == 6 and queries == before_queries)
 tmux.is_tmux = true
 helpers.write_graphics_at(other, 4, 6)
 assert(last.x == 16 and last.y == 13 and queries == before_queries)
+-- Exercise the serialized UI path with a tmux status-row offset and passthrough escaping.
+tmux.get_pane_position = function() return {left=12, top=7} end
+tmux.escape = function(value) return '\27Ptmux;' .. value:gsub('\27', '\27\27') .. '\27\\' end
+vim.api.nvim_list_uis = function() return {{stdout_tty=true}} end
+package.loaded['ipynb.image_kitty'], package.loaded['ipynb.image_tmux'] = nil, nil
+package.loaded['image/backends/kitty/helpers'] = helpers
+reply = '1 1 1 top on 40 0\n'
+local transport_img = {internal_id=7, global_state={options={backend='kitty'}}}
+require('ipynb.image_kitty').track(transport_img, {get_size=function() return {cell_width=8,cell_height=16} end})
+local before_sent = #sent
+helpers.write_graphics_at(config, 4, 6)
+assert(#sent == before_sent + 1 and sent[#sent]:find('\27Ptmux;') == 1, vim.inspect(sent))
+assert(sent[#sent]:find('\27\27%[14;16H') ~= nil, vim.inspect(sent[#sent]))
+vim.fn.writefile({vim.json.encode({cold=cold, loads=loads, writes=writes, sent=sent, graphics_fallbacks=graphics_fallbacks, original=config,
+  other=other, result=result, counts=counts, delays=delays, before=before, finishes=finishes,
+  survived=survived, failure=failure, warnings=warnings})}, vim.env.IPYNB_TEST_REPORT)
 "#).unwrap();
     let output = Command::new(std::env::var_os("IPYNB_TEST_NVIM").unwrap_or_else(|| "nvim".into()))
         .args(["--headless", "-u", "NONE", "-l"])
@@ -132,31 +157,58 @@ assert(last.x == 16 and last.y == 13 and queries == before_queries)
     let observed: Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
     assert_eq!(observed["cold"], true);
     assert_eq!(observed["loads"], 1);
-    assert_eq!(observed["result"], "sent");
-    assert_eq!(observed["writes"].as_array().unwrap().len(), 4);
+    assert_eq!(observed["result"], Value::Null);
+    assert_eq!(observed["writes"].as_array().unwrap().len(), 2);
     let original = json!({"action":"p", "image_id":7, "display_width":320,
         "display_height":320, "display_x":8, "display_y":16});
     assert_eq!(observed["original"], original);
     let mut other = original.clone();
     other["image_id"] = json!(8);
     assert_eq!(observed["other"], other);
-    let mut placed = original;
-    placed["display_columns"] = json!(40);
-    placed["display_rows"] = json!(20);
-    placed["display_zindex"] = json!(1);
     assert_eq!(
         observed["writes"][0],
-        json!({"config":placed, "x":4, "y":6})
-    );
-    assert_eq!(
-        observed["writes"][1],
         json!({"config":observed["other"], "x":1, "y":2})
     );
+    assert!(
+        observed["sent"][0]
+            .as_str()
+            .unwrap()
+            .contains("\u{001b}[6;4H\u{001b}_G")
+    );
+    let first_header = observed["sent"][1]
+        .as_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    assert!(first_header.starts_with("\u{001b}_G"));
+    for field in ["a=t", "i=7", "t=f"] {
+        assert!(first_header.contains(field), "{first_header}");
+    }
+    assert!(!first_header.contains("\u{001b}_GGa="), "{first_header}");
+    assert!(observed["sent"][1].as_str().unwrap().contains(";L3Rt"));
+    assert!(observed["sent"][2].as_str().unwrap().contains("m=1;cC9h"));
+    assert!(observed["sent"][3].as_str().unwrap().contains("m=1;LnBu"));
+    assert!(observed["sent"][4].as_str().unwrap().contains("m=0;Zw=="));
+    let delete_sequence = observed["sent"][5].as_str().unwrap();
+    assert!(delete_sequence.starts_with("\u{001b}_G") && delete_sequence.ends_with("\u{001b}\\"));
+    for field in ["a=d", "i=7"] {
+        assert!(delete_sequence.contains(field), "{delete_sequence}");
+    }
+    assert!(
+        observed["sent"][6]
+            .as_str()
+            .unwrap()
+            .contains("\u{001b}[4;3H\u{001b}_G")
+    );
+    assert_eq!(observed["graphics_fallbacks"].as_array().unwrap().len(), 1);
+    assert_eq!(observed["graphics_fallbacks"][0]["transmit_medium"], "d");
+    assert_eq!(observed["sent"].as_array().unwrap().len(), 9); // includes ordered sync completion and tmux placement
     assert_eq!(observed["other"]["display_columns"], Value::Null);
     assert_eq!(observed["counts"], json!([0, 0, 0, 0]));
     assert_eq!(observed["delays"], json!([]));
     assert_eq!(observed["before"], 0);
-    assert_eq!(observed["finishes"], 1);
+    assert_eq!(observed["finishes"], 0);
     assert_eq!(observed["survived"], true);
     assert_eq!(observed["warnings"].as_array().unwrap().len(), 1);
     assert!(
@@ -192,7 +244,10 @@ fn plot_corners_preserve_aspect_ratio_inside_the_cell_canvas() {
 vim.opt.rtp:prepend(vim.env.IPYNB_TEST_ROOT)
 local style = require('ipynb.image_style')
 local radius, stroke, inner = style.metrics({cell_width=10, cell_height=22})
-assert(math.abs(radius - 15.4) < 0.001 and stroke == 2 and inner == radius * 0.75)
+local doubled, doubled_stroke, doubled_inner = style.metrics({cell_width=20, cell_height=44})
+assert(radius == 5 and stroke == 1 and inner == 1 and inner < radius)
+assert(doubled == radius * 2 and doubled_stroke == stroke * 2 and doubled_inner == inner * 2,
+  'corner radii must scale with terminal cell width')
 local done = false
 style.rounded(vim.env.IPYNB_TEST_SOURCE, 640, 506, inner, 500, 400, function(path)
   assert(vim.uv.fs_copyfile(path, vim.env.IPYNB_TEST_RESULT))
@@ -221,9 +276,29 @@ assert(vim.wait(10000, function() return done end), 'rounded image conversion di
         .output()
         .unwrap();
     assert!(pixels.status.success());
+    let pixels: Vec<f32> = String::from_utf8(pixels.stdout)
+        .unwrap()
+        .split_whitespace()
+        .map(|value| value.parse().unwrap())
+        .collect();
     assert_eq!(
-        String::from_utf8(pixels.stdout).unwrap(),
-        "640 506 0 0 0 1 1"
+        &pixels[..2],
+        &[640.0, 506.0],
+        "canvas dimensions must stay exact"
+    );
+    assert!(
+        pixels[2] > 0.0 && pixels[2] < 1.0,
+        "rounded corner must be antialiased"
+    );
+    assert!(
+        (pixels[2] - pixels[3]).abs() < 0.001,
+        "top corners must be symmetric"
+    );
+    assert_eq!(pixels[4], 0.0, "canvas padding must remain transparent");
+    assert_eq!(
+        &pixels[5..],
+        &[1.0, 1.0],
+        "image content must remain opaque"
     );
     assert_eq!(
         fs::read(source).unwrap(),

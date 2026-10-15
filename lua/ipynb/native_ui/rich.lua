@@ -46,16 +46,51 @@ return function(state)
   local function snacks_api()
     if not providers["snacks.nvim"] then
       local ok, module = pcall(require, "ipynb.molten_load_snacks_nvim")
-      local api = ok and module and module.snacks_api or nil
-      providers["snacks.nvim"] = api and {
-        from_file = api.from_file,
-        image_size = api.image_size,
-        render = api.render,
-        clear = api.clear,
-        clear_all = api.clear_all,
-        refresh = function() end,
-        layout_key = function() return {} end,
-      } or none_api
+      local snacks = ok and module and module.snacks_api or none_api
+      local handles, used = {}, {}
+      providers["snacks.nvim"] = {
+        from_file = function(path, opts)
+          local api = opts.virtual_layout and image_nvim_api() or snacks
+          used[api] = true
+          local id = api.from_file(path, opts)
+          if not id then return nil end
+          local handle = {}
+          handles[handle] = { api = api, id = id }
+          return handle
+        end,
+        image_size = function(handle)
+          local record = handles[handle]
+          return record and record.api.image_size(record.id) or { width = 0, height = 0 }
+        end,
+        render = function(handle)
+          local record = handles[handle]
+          if record then record.api.render(record.id) end
+        end,
+        clear = function(handle)
+          local record = handles[handle]
+          if record then
+            record.api.clear(record.id)
+            handles[handle] = nil
+          end
+        end,
+        clear_all = function()
+          for api in pairs(used) do
+            if api.clear_all then
+              api.clear_all()
+            else
+              for handle, record in pairs(handles) do
+                if record.api == api then
+                  api.clear(record.id)
+                  handles[handle] = nil
+                end
+              end
+            end
+          end
+          handles, used = {}, {}
+        end,
+        refresh = function() image_nvim_api().refresh() end,
+        layout_key = function() return image_nvim_api().layout_key() end,
+      }
     end
     return providers["snacks.nvim"]
   end

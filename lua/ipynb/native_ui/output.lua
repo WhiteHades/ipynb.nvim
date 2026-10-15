@@ -76,7 +76,11 @@ return function(state, rich)
     local tick = vim.api.nvim_buf_get_changedtick(cell.buf)
     local spans
     if vim.b[cell.buf].ipynb_code_spans_tick == tick then
-      spans = vim.b[cell.buf].ipynb_code_spans
+      if not buffer.layout_known_spans or buffer.layout_known_tick ~= tick then
+        buffer.layout_known_tick = tick
+        buffer.layout_known_spans = vim.b[cell.buf].ipynb_code_spans
+      end
+      spans = buffer.layout_known_spans
     else
       if buffer.layout_tick ~= tick then
         buffer.layout_tick = tick
@@ -86,10 +90,14 @@ return function(state, rich)
       spans = buffer.layout_spans
     end
     if spans then
-      for _, span in ipairs(spans) do
-        if span.begin[1] <= first.line and last.line <= span["end"][1] then
-          return { line = span["end"][1], col = span["end"][2] }
-        end
+      local low, high = 1, #spans
+      while low <= high do
+        local middle = math.floor((low + high) / 2)
+        if spans[middle].begin[1] <= first.line then low = middle + 1 else high = middle - 1 end
+      end
+      local span = spans[high]
+      if span and last.line <= span["end"][1] then
+        return { line = span["end"][1], col = span["end"][2] }
       end
     end
     return last
@@ -205,10 +213,10 @@ return function(state, rich)
 
   local function source_relative_row(win, row)
     local info = vim.fn.getwininfo(win)[1]
-    if not info then return 0 end
+    if not info then return end
     local count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
     local pos = vim.fn.screenpos(win, math.min(count, row + 1), 1)
-    if not pos or pos.row == 0 then return 0 end
+    if not pos or pos.row == 0 then return end
     return math.max(0, pos.row - info.winrow)
   end
 
@@ -247,7 +255,7 @@ return function(state, rich)
     cell.ui.reserve_mark = vim.api.nvim_buf_set_extmark(cell.buf, output_ns, row, 0, mark_options)
   end
 
-  function M.render_float(cell, focus)
+  function M.render_float(cell, focus, reveal)
     local end_pos = output_end(cell)
     if not end_pos then return false end
     local float = cell.ui.float
@@ -258,12 +266,29 @@ return function(state, rich)
 
     local border = rich.border_with_highlight(vim.deepcopy(state.options.output_win_border), cell)
     local border_width, border_height = border_size(border)
-    local screen_height = info.height - border_height
+    local anchor_row = source_relative_row(source, end_pos.line)
+    local row = anchor_row and anchor_row + 2 or info.height
+    if reveal and row + border_height >= info.height and info.height > border_height + 2 then
+      vim.api.nvim_win_call(source, function()
+        vim.api.nvim_win_set_cursor(source, { end_pos.line + 1, 0 })
+        vim.cmd("normal! zt")
+      end)
+      anchor_row = source_relative_row(source, end_pos.line)
+      row = anchor_row and anchor_row + 2 or info.height
+    end
+    local screen_height = info.height - row - border_height
     local available_height = math.min(screen_height, number(state.options.output_win_max_height, 999999))
     local available_width = math.min(info.width - border_width, number(state.options.output_win_max_width, 999999))
     local gutter = state.options.output_win_cover_gutter and 0 or info.textoff
     available_width = available_width - gutter
     if available_width < 1 or available_height < 1 then
+      if float and valid_win(float.win) and available_width > 0 and info.height > border_height + 2
+        and number(state.options.output_win_max_height, 999999) > 0 then
+        rich.clear_images(cell, "float")
+        vim.api.nvim_win_set_config(float.win, { hide = true })
+        cell.ui.float_key = nil
+        return false
+      end
       M.close_float(cell, true)
       M.show_virtual(cell, true)
       return false
@@ -306,8 +331,6 @@ return function(state, rich)
     })
 
     local height = math.min(available_height, #lines)
-    local row = source_relative_row(source, end_pos.line)
-    row = math.max(0, math.min(row, info.height - border_height - height))
     local cropped = height == screen_height and #lines > height
     if cropped and state.options.output_crop_border and type(border) == "table" and #border > 0 then
       local expanded = {}
@@ -326,6 +349,7 @@ return function(state, rich)
       height = height,
       border = border,
       focusable = true,
+      hide = false,
       zindex = number(state.options.output_win_zindex, 50),
     }
     if state.options.output_win_style then win_config.style = state.options.output_win_style end
@@ -361,7 +385,7 @@ return function(state, rich)
       pcall(vim.api.nvim_win_set_cursor, float.win, { 1, 0 })
     end
 
-    reserve_float_space(cell, #lines + border_height)
+    reserve_float_space(cell, #lines + border_height + 1)
     for _, record in ipairs(rich.image_records(cell, "float")) do pcall(record.api.render, record.id) end
     if api.refresh then pcall(api.refresh) end
     cell.ui.float_key = float_key
@@ -379,14 +403,14 @@ return function(state, rich)
     if not existed and behavior == "no_open" then return false end
     cell.ui.hidden = false
     local focus = existed or behavior == "open_and_enter"
-    return M.render_float(cell, focus)
+    return M.render_float(cell, focus, true)
   end
 
   function M.show(cell_id)
     local cell = state.find_cell(cell_id)
     if not cell then return false end
     cell.ui.hidden = false
-    return M.render_float(cell, false)
+    return M.render_float(cell, false, true)
   end
 
   function M.hide(explicit, cell_id)

@@ -216,6 +216,8 @@ remain visible when the editor loses focus; tmux visibility checks still keep
 them in their owning session and window.
 Use image.nvim's max_width and max_height to
 limit image size, or output.height and output.width to cap the output window.
+When the selected provider is snacks.nvim, inline output keeps image.nvim's
+virtual placement support. Snacks renders images in floating output buffers.
 
 With :set mouse=a, click an image in Normal or Insert mode to open only the
 clicked image in a centered terminal viewer. :IpynbImagePopup and

@@ -23,7 +23,7 @@ local function configured_options()
     auto_image_popup = false, auto_open_html_in_browser = false, auto_open_output = false,
     enter_output_behavior = "open_then_enter", output_crop_border = true,
     output_show_exec_time = true, output_show_more = false, output_virt_lines = false,
-    output_win_border = { "", "━", "", "" }, output_win_cover_gutter = true,
+    output_win_border = { "", "━", "", "" }, output_win_cover_gutter = false,
     output_win_hide_on_leave = true, output_win_max_height = 999999, output_win_max_width = 999999,
     output_win_zindex = 50, output_win_style = false, use_border_highlights = false,
     virt_lines_off_by_1 = false, virt_text_max_lines = 12, virt_text_output = false,

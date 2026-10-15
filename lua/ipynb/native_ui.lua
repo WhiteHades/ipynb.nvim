@@ -20,7 +20,7 @@ local defaults = {
   output_show_more = true,
   output_virt_lines = true,
   output_win_border = { "╭", "─", "╮", "│", "╯", "─", "╰", "│" },
-  output_win_cover_gutter = true,
+  output_win_cover_gutter = false,
   output_win_hide_on_leave = false,
   output_win_max_height = 999999,
   output_win_max_width = 999999,
@@ -198,6 +198,7 @@ local function refresh(buf, force, cursor_only)
   if view.shutting_down then return end
   local state = buffers[buf]
   if not state or not valid_buf(buf) then return end
+  state.layout_known_spans = nil
   pcall(vim.api.nvim_buf_clear_namespace, buf, highlight_ns, 0, -1)
   local selected = nil
   local win = source_window(buf)

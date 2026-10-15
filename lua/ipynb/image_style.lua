@@ -5,9 +5,10 @@ local pending, ready = {}, {}
 local closing = false
 
 function M.metrics(size)
-  local radius = size.cell_height * 0.7
-  return radius, math.max(1, math.floor(size.cell_width * 0.20 + 0.5)),
-    radius * 0.75
+  local outer = size.cell_width * 0.5
+  local stroke = math.max(1, math.floor(size.cell_width * 0.1 + 0.5))
+  -- Tiny images need optical rounding because their padding exceeds the native outer curve.
+  return outer, stroke, math.max(outer - size.cell_width - stroke, stroke)
 end
 
 function M.generate(key, args, callback)
