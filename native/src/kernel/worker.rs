@@ -203,7 +203,7 @@ fn run_zmq_worker(
 ) {
     let mut session = SessionState::new();
     match worker.transport.send_kernel_info(&session.session_id) {
-        Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+        Ok(_) => session.probe_sent(Instant::now()),
         Err(error) => {
             emit_stopped(&events, "shell", error);
             worker.shutdown(&session.session_id);
@@ -237,7 +237,7 @@ fn run_zmq_worker(
         }
         if session.probe_due(now) {
             match worker.transport.send_kernel_info(&session.session_id) {
-                Ok(msg_id) => session.probe_sent(msg_id, now),
+                Ok(_) => session.probe_sent(now),
                 Err(error) => {
                     emit_stopped(&events, "shell", error);
                     break;
@@ -321,7 +321,7 @@ fn handle_zmq_command(
         CommandMessage::Restart => {
             session.reset();
             match worker.restart(&session.session_id) {
-                Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+                Ok(_) => session.probe_sent(Instant::now()),
                 Err(error) => {
                     emit_stopped(events, "restart", error);
                     return true;

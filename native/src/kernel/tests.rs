@@ -199,7 +199,7 @@ fn local_launch_preserves_kernelspec_argv_and_environment() {
 fn pending_execution_is_fifo_and_only_flushes_after_ready() {
     let mut session = SessionState::new();
     let started = Instant::now();
-    session.probe_sent("probe".to_string(), started);
+    session.probe_sent(started);
     session
         .pending
         .push_back(("one".to_string(), "1".to_string()));
@@ -209,14 +209,14 @@ fn pending_execution_is_fifo_and_only_flushes_after_ready() {
     let info = message_value(
         "shell",
         json!({"msg_type":"kernel_info_reply"}),
-        json!({"msg_id":"probe"}),
+        json!({"msg_id":"probe", "session":session.session_id}),
         json!({}),
         json!({}),
     );
     let idle = message_value(
         "iopub",
         json!({"msg_type":"status"}),
-        json!({"msg_id":"probe"}),
+        json!({"msg_id":"probe", "session":session.session_id}),
         json!({}),
         json!({"execution_state":"idle"}),
     );
@@ -228,6 +228,45 @@ fn pending_execution_is_fifo_and_only_flushes_after_ready() {
     assert!(session.ready);
     assert_eq!(session.pending.pop_front().unwrap().0, "one");
     assert_eq!(session.pending.pop_front().unwrap().0, "two");
+
+    let previous_session = session.session_id.clone();
+    session.reset();
+    assert_ne!(session.session_id, previous_session);
+    session.probe_sent(started);
+    session.observe(&info, "shell", started);
+    session.observe(&idle, "iopub", started);
+    assert!(!session.maybe_ready(started + Duration::from_secs(2)));
+    let mut current_info = info.clone();
+    current_info["parent_header"]["session"] = json!(session.session_id);
+    session.observe(&current_info, "shell", started);
+    assert!(
+        !session.maybe_ready(started + Duration::from_millis(200)),
+        "buffered IOPub from a previous session must not release queued work"
+    );
+
+    for late_channel in ["shell", "iopub"] {
+        session.reset();
+        session.probe_sent(started);
+        let mut current_info = info.clone();
+        current_info["parent_header"]["session"] = json!(session.session_id);
+        let mut current_idle = idle.clone();
+        current_idle["parent_header"]["session"] = json!(session.session_id);
+        let (early, early_channel, late, retry_ms) = if late_channel == "shell" {
+            (&current_idle, "iopub", &current_info, 1001)
+        } else {
+            (&current_info, "shell", &current_idle, 201)
+        };
+        session.observe(early, early_channel, started);
+        let retry = started + Duration::from_millis(retry_ms);
+        assert!(session.probe_due(retry));
+        session.probe_sent(retry);
+        session.observe(late, late_channel, retry + Duration::from_millis(25));
+        assert!(!session.probe_due(retry + Duration::from_secs(2)));
+        assert!(!session.maybe_ready(retry + Duration::from_millis(224)));
+        session.observe(&idle, "iopub", retry + Duration::from_millis(150));
+        assert!(!session.maybe_ready(retry + Duration::from_millis(349)));
+        assert!(session.maybe_ready(retry + Duration::from_millis(350)));
+    }
 }
 
 #[test]
@@ -301,7 +340,7 @@ fn attached_kernel_executes_queued_code_over_signed_zmq() {
                         first_probe = false;
                         continue; // Simulate IOPub's initial slow-joiner loss.
                     }
-                    thread::sleep(Duration::from_millis(60));
+                    thread::sleep(Duration::from_millis(225));
                     let status = wire_frames(
                         &key,
                         json!({
@@ -388,15 +427,19 @@ fn attached_kernel_executes_queued_code_over_signed_zmq() {
         }
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(messages.iter().any(|message| {
+    let executed = messages.iter().any(|message| {
         message["header"]["msg_type"] == "execute_result"
             && message["parent_header"]["msg_id"] == request
             && message["content"]["data"]["text/plain"] == "2 + 2"
-    }));
+    });
     kernel.shutdown().unwrap();
     stop.store(true, Ordering::SeqCst);
     server.join().unwrap();
     fs::remove_file(path).unwrap();
+    assert!(
+        executed,
+        "delayed probe traffic must not starve queued execution"
+    );
 }
 
 #[test]

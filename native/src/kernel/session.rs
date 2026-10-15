@@ -9,7 +9,6 @@ use uuid::Uuid;
 pub(super) struct SessionState {
     pub(super) session_id: String,
     pub(super) ready: bool,
-    probe_id: Option<String>,
     probe_deadline: Option<Instant>,
     shell_ready: bool,
     iopub_ready: bool,
@@ -26,7 +25,6 @@ impl SessionState {
         Self {
             session_id: Uuid::new_v4().to_string(),
             ready: false,
-            probe_id: None,
             probe_deadline: None,
             shell_ready: false,
             iopub_ready: false,
@@ -37,8 +35,8 @@ impl SessionState {
     }
 
     pub(super) fn reset(&mut self) {
+        self.session_id = Uuid::new_v4().to_string();
         self.ready = false;
-        self.probe_id = None;
         self.probe_deadline = None;
         self.shell_ready = false;
         self.iopub_ready = false;
@@ -47,13 +45,8 @@ impl SessionState {
         self.input_parent = json!({});
     }
 
-    pub(super) fn probe_sent(&mut self, msg_id: String, now: Instant) {
-        self.ready = false;
-        self.probe_id = Some(msg_id);
+    pub(super) fn probe_sent(&mut self, now: Instant) {
         self.probe_deadline = Some(now + Self::KERNEL_INFO_TIMEOUT);
-        self.shell_ready = false;
-        self.iopub_ready = false;
-        self.iopub_last = None;
     }
 
     pub(super) fn probe_due(&self, now: Instant) -> bool {
@@ -68,13 +61,16 @@ impl SessionState {
             .and_then(|header| header.get("msg_type"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let parent_msg_id = message
+        let parent_session = message
             .get("parent_header")
-            .and_then(|parent| parent.get("msg_id"))
+            .and_then(|parent| parent.get("session"))
             .and_then(Value::as_str);
-        let matches_probe = self.probe_id.as_deref() == parent_msg_id;
 
-        if channel == "shell" && msg_type == "kernel_info_reply" && matches_probe {
+        // Replies to any retry in this session prove that shell is connected.
+        if channel == "shell"
+            && msg_type == "kernel_info_reply"
+            && parent_session == Some(self.session_id.as_str())
+        {
             self.shell_ready = true;
             if self.iopub_ready {
                 self.iopub_last = Some(now);
@@ -84,14 +80,12 @@ impl SessionState {
             }
         }
         if channel == "iopub" {
-            if matches_probe {
+            if parent_session == Some(self.session_id.as_str()) {
                 self.iopub_ready = true;
-                if self.shell_ready {
-                    self.iopub_last = Some(now);
-                    self.probe_deadline = None;
-                }
-            } else if self.shell_ready && self.iopub_ready {
+            }
+            if self.shell_ready && self.iopub_ready {
                 self.iopub_last = Some(now);
+                self.probe_deadline = None;
             }
         }
         if msg_type == "input_request" {
@@ -112,7 +106,6 @@ impl SessionState {
                 .is_some_and(|last| now.duration_since(last) >= Self::IOPUB_DRAIN)
         {
             self.ready = true;
-            self.probe_id = None;
             self.probe_deadline = None;
             return true;
         }

@@ -238,7 +238,7 @@ pub(super) fn run_external_worker(
     };
     let mut session = SessionState::new();
     match worker.send_kernel_info(&session.session_id) {
-        Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+        Ok(_) => session.probe_sent(Instant::now()),
         Err(error) => {
             emit_stopped(&events, "websocket", error);
             let _ = worker.shutdown();
@@ -261,7 +261,7 @@ pub(super) fn run_external_worker(
 
         if session.probe_due(Instant::now()) {
             match worker.send_kernel_info(&session.session_id) {
-                Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+                Ok(_) => session.probe_sent(Instant::now()),
                 Err(error) => {
                     emit_stopped(&events, "websocket", error);
                     break 'worker;
@@ -349,7 +349,7 @@ fn handle_external_command(
                 return true;
             } else {
                 match worker.send_kernel_info(&session.session_id) {
-                    Ok(msg_id) => session.probe_sent(msg_id, Instant::now()),
+                    Ok(_) => session.probe_sent(Instant::now()),
                     Err(error) => {
                         emit_stopped(events, "websocket", error);
                         return true;
