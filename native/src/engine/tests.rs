@@ -419,6 +419,53 @@ fn jupytext_config_pair_sync_and_export_keep_outputs_and_reject_conflicts() -> R
         "formats = 'ipynb,py:percent'\ncell_metadata_filter = 'all'\n",
     )?;
     let mut engine = save_engine()?;
+    let config = directory.path().join("jupytext.toml");
+    let settings = std::fs::read_to_string(&config)?;
+    let modified = std::fs::metadata(&config)?.modified()?;
+    let source = "# First\n\n# Second\n\n```python\nprint(1)\n```";
+    let parsed = engine.converter.convert_at(source, None, Some(&path))?;
+    assert_eq!(parsed["cells"].as_array().unwrap().len(), 2);
+    std::fs::write(&config, format!("{settings}split_at_heading = true\n"))?;
+    std::fs::File::options()
+        .write(true)
+        .open(&config)?
+        .set_times(std::fs::FileTimes::new().set_modified(modified))?;
+    assert_eq!(
+        engine.converter.convert_at(source, None, Some(&path))?["cells"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    std::fs::remove_file(&config)?;
+    assert_eq!(
+        engine.converter.convert_at(source, None, Some(&path))?["cells"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    std::fs::write(&config, "split_at_heading = [invalid")?;
+    assert!(
+        engine
+            .converter
+            .convert_at(source, None, Some(&path))
+            .is_err()
+    );
+    std::fs::write(&config, &settings)?;
+    let mut existing = parsed.clone();
+    existing["cells"][1]["outputs"] =
+        json!([{"output_type":"stream","name":"stdout","text":"kept\n"}]);
+    existing["cells"][1]["execution_count"] = json!(7);
+    let merged = engine
+        .converter
+        .convert_at(source, Some(existing), Some(&path))?;
+    assert_eq!(text(&merged["cells"][1]["outputs"][0]["text"]), "kept\n");
+    assert_eq!(merged["cells"][1]["execution_count"], 7);
+    assert_eq!(
+        engine.converter.convert_at(source, None, Some(&path))?["cells"][1]["outputs"],
+        json!([])
+    );
     let (buffer, mtime) = save_duplicate_fixture(&mut engine, &path)?;
     let read = engine.read(&json!({"path":path}))?;
     assert!(text(&read["text"]).contains("custom="));
@@ -682,6 +729,12 @@ fn save_duplicate_fixture(engine: &mut Engine, path: &Path) -> Result<(String, V
 #[test]
 fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Result<()> {
     let mut positioned = save_engine()?;
+    let prefix = positioned.converter.marker_prefix("").to_owned();
+    let collision = format!("```python\nprint({prefix:?})\n```");
+    let replacement = positioned.converter.marker_prefix(&collision).to_owned();
+    assert_ne!(replacement, prefix);
+    assert!(!collision.contains(&replacement));
+    assert_eq!(positioned.converter.marker_prefix(&collision), replacement);
     let source = "```python\n# 日本語\nprint(1)\n```\n\n```python\nprint(1)\n```";
     let (sources, positions) = super::matching::positioned_sources(
         &mut positioned.converter,

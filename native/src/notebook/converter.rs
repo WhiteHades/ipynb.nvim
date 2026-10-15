@@ -19,6 +19,7 @@ pub struct Converter {
     python: String,
     script: PathBuf,
     process: Option<Process>,
+    marker_prefix: String,
 }
 
 struct Process {
@@ -35,7 +36,15 @@ impl Converter {
             python: python.into(),
             script: script.into(),
             process: None,
+            marker_prefix: format!("__ipynb_{}_", uuid::Uuid::new_v4().simple()),
         }
+    }
+
+    pub fn marker_prefix(&mut self, buffer: &str) -> &str {
+        while buffer.contains(&self.marker_prefix) {
+            self.marker_prefix = format!("__ipynb_{}_", uuid::Uuid::new_v4().simple());
+        }
+        &self.marker_prefix
     }
 
     pub fn call(&mut self, request: &Value) -> Result<Value> {

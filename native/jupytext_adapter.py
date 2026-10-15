@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
-from copy import deepcopy
+from copy import copy, deepcopy
 from hashlib import sha256
 import json
 import os
@@ -31,6 +31,9 @@ from jupytext.formats import (
 )
 from jupytext.paired_paths import base_path, find_base_path_and_format, paired_paths
 from jupytext.sync_pairs import write_pair
+
+_convert_cache: tuple[tuple[Any, ...], Any] | None = None
+
 
 def _path(value: Any) -> Path:
     if not isinstance(value, str) or not value:
@@ -136,7 +139,35 @@ def read_request(request: dict[str, Any]) -> dict[str, Any]:
 
 def convert_request(request: dict[str, Any]) -> Any:
     config = _context(request["path"])[1] if request.get("path") else None
-    source = jupytext.reads(str(request.get("text", "")), fmt="md:markdown", config=config)
+    global _convert_cache
+    text = str(request.get("text", ""))
+    key = None
+    if len(text) <= 1_000_000:
+        try:
+            traits = config.traits(config=True) if config is not None else None
+            settings = (
+                json.dumps(
+                    {name: getattr(config, name) for name in traits},
+                    allow_nan=False,
+                    sort_keys=True,
+                )
+                if config is not None else None
+            )
+        except (TypeError, ValueError):
+            pass
+        else:
+            key = (str(_path(request["path"])) if request.get("path") else None,
+                   jupytext.__version__, settings, text)
+    if key is not None and _convert_cache is not None and _convert_cache[0] == key:
+        source = _convert_cache[1]
+    else:
+        _convert_cache = None
+        source = jupytext.reads(text, fmt="md:markdown", config=config)
+        if key is not None and len(source.cells) <= 4096:
+            _convert_cache = (key, source)
+    if _convert_cache is not None and source is _convert_cache[1]:
+        # Classification replaces metadata; output merging also mutates cells.
+        source = deepcopy(source) if request.get("existing") is not None else copy(source)
     if request.get("existing") is not None:
         source = combine_inputs_with_outputs(source, _notebook(request["existing"]), fmt="md:markdown")
     if request.get("path"):
