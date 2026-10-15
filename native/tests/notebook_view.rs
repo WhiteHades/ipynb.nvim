@@ -399,6 +399,25 @@ local ok, err = xpcall(function()
       if diagnostic.message == 'configured notebook lint' then return true end
     end
   end, 10), 'configured Python lint diagnostics must appear on notebook source')
+  local recovery_tick = vim.api.nvim_buf_get_changedtick(saved_buf)
+  local old_embedded = require('otter.keeper').rafts[saved_buf].buffers.python
+  require('otter').deactivate()
+  assert(vim.wait(1000, function()
+    return require('otter.keeper').rafts[saved_buf] == nil and not vim.api.nvim_buf_is_valid(old_embedded)
+  end, 5))
+  local scratch = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(scratch)
+  vim.api.nvim_set_current_buf(saved_buf)
+  local recovered = require('otter.keeper').rafts[saved_buf]
+  assert(recovered and vim.api.nvim_buf_is_loaded(recovered.buffers.python),
+    'returning to an unchanged notebook must restore deactivated language tools')
+  vim.treesitter.stop(saved_buf)
+  vim.api.nvim_set_current_buf(scratch)
+  vim.api.nvim_set_current_buf(saved_buf)
+  assert(vim.treesitter.highlighter.active[saved_buf].ipynb_fences,
+    'returning to an unchanged notebook must restore its custom highlighter')
+  assert(vim.api.nvim_buf_get_changedtick(saved_buf) == recovery_tick, 'tool recovery must not edit the notebook')
+  vim.api.nvim_buf_delete(scratch, {force=true})
   local disk_lint, write_to_disk = false, OtterConfig.buffers.write_to_disk
   local embedded = require('otter.keeper').rafts[saved_buf].buffers.python
   local embedded_path = vim.api.nvim_buf_get_name(embedded)

@@ -319,6 +319,15 @@ local function activate_notebook_buffer(bufnr)
     return
   end
 
+  if vim.b[bufnr].ipynb_activation_tick == vim.api.nvim_buf_get_changedtick(bufnr)
+    and vim.b[bufnr].ipynb_markdown_enabled == true then
+    local embedded = vim.fn.bufnr(vim.api.nvim_buf_get_name(bufnr) .. ".otter.py")
+    local keeper = package.loaded["otter.keeper"]
+    local highlighter = vim.treesitter.highlighter.active[bufnr]
+    if embedded >= 0 and vim.api.nvim_buf_is_loaded(embedded)
+      and keeper and keeper.rafts[bufnr] and highlighter and highlighter.ipynb_fences then return end
+  end
+
   vim.b[bufnr].notebook_markdown = true
   if vim.b[bufnr].completion == nil then vim.b[bufnr].completion = true end
   vim.bo[bufnr].swapfile = false
@@ -332,7 +341,7 @@ local function activate_notebook_buffer(bufnr)
   vim.api.nvim_buf_call(bufnr, function()
     local otter = require("otter")
     local embedded = vim.fn.bufnr(vim.api.nvim_buf_get_name(bufnr) .. ".otter.py")
-    if embedded >= 0 and vim.api.nvim_buf_is_loaded(embedded) then
+    if embedded >= 0 and vim.api.nvim_buf_is_loaded(embedded) and require("otter.keeper").rafts[bufnr] then
       otter.sync_raft(bufnr)
     else
       otter.activate({ "python" }, true, true)
@@ -341,6 +350,7 @@ local function activate_notebook_buffer(bufnr)
 
   set_notebook_keymaps(bufnr)
   if M.options.auto_init then ensure_notebook_kernel(bufnr) end
+  vim.b[bufnr].ipynb_activation_tick = vim.api.nvim_buf_get_changedtick(bufnr)
 end
 
 function M.init(opts)
@@ -446,8 +456,12 @@ function M.setup(opts)
     vim.bo[ev.buf].buftype = "acwrite"
   end)
   autocmd({ "BufReadPost", "BufEnter" }, function(ev) activate_notebook_buffer(ev.buf) end)
-  autocmd({ "BufWinEnter", "BufWritePost", "InsertEnter", "InsertLeave", "TextChanged", "TextChangedI" }, function(ev)
+  autocmd("BufWinEnter", function(ev)
     require("ipynb.markdown").enable(ev.buf)
+    require("ipynb.native_ui").refresh(ev.buf)
+  end)
+  autocmd({ "BufWritePost", "InsertEnter", "InsertLeave", "TextChanged", "TextChangedI" }, function(ev)
+    require("ipynb.markdown").refresh(ev.buf)
     require("ipynb.native_ui").refresh(ev.buf)
   end)
   autocmd("BufWritePre", function(ev) require("ipynb.editor").format(ev.buf) end)
