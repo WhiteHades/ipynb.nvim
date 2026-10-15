@@ -1,96 +1,72 @@
-<div align="center">
+<p align="center"><img src="assets/logo.svg" width="112" alt="ipynb.nvim logo"></p>
 
-<pre>
-    _                   _&#32;&#32;&#32;&#32;&#32;&#32;
-   (_) _ __  _   _ _ __ | |__&#32;&#32;
-   | || '_ \| | | | '_ \| '_ \&#32;
-   | || |_) | |_| | | | | |_) |
-   |_|| .__/ \__, |_| |_|_.__/&#32;
-      |_|    |___/       .nvim&#32;
-</pre>
+# ipynb.nvim
 
-<h1>ipynb.nvim</h1>
-<p>Jupyter notebooks in Neovim. Edit cells, run code, and view plots in your terminal.</p>
+[Jupyter](https://jupyter.org/) notebooks in [Neovim](https://neovim.io). Edit cells, run code, and view plots in your terminal.
 
-<p>
-<a href="https://github.com/WhiteHades/ipynb.nvim/releases"><img src="https://img.shields.io/github/v/release/WhiteHades/ipynb.nvim?style=flat-square&amp;cacheSeconds=300" alt="Latest release"></a>
-<a href="https://neovim.io"><img src="https://img.shields.io/badge/Neovim-0.12%2B-57a143?style=flat-square&amp;logo=neovim&amp;logoColor=white" alt="Neovim 0.12 or newer"></a>
-<a href="https://github.com/WhiteHades/ipynb.nvim/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="GPL-3.0 license"></a>
-</p>
+[Latest release](https://github.com/WhiteHades/ipynb.nvim/releases) | [Neovim 0.12 or newer](https://neovim.io) | [GPL 3.0](LICENSE)
 
-<p><a href="#install">Install</a> | <a href="#use">Use</a> | <a href="#help">Help</a></p>
-
-<a href="https://github.com/WhiteHades/ipynb.nvim/blob/main/assets/notebook.png"><img src="https://raw.githubusercontent.com/WhiteHades/ipynb.nvim/main/assets/notebook.png" alt="A notebook running in Neovim" width="900"></a>
-
-</div>
+<p align="center"><a href="assets/notebook.png"><img src="assets/notebook.png" alt="Python cells, text output, and a plot in a fullscreen notebook" width="900"></a></p>
 
 ## Install
 
-Requires Neovim 0.12 or newer. For LazyVim, create
-`~/.config/nvim/lua/plugins/ipynb.lua`:
+Requires Neovim 0.12 or newer. For [LazyVim](https://www.lazyvim.org/), add this plugin spec to `~/.config/nvim/lua/plugins/ipynb.lua`:
 
 ```lua
 return {
-  { "WhiteHades/ipynb.nvim", lazy = false, opts = {} },
+  {
+    "WhiteHades/ipynb.nvim",
+    lazy = false,
+    opts = {},
+    dependencies = {
+      "goerz/jupytext.nvim",
+      { "quarto-dev/quarto-nvim", dependencies = { "jmbuhr/otter.nvim" } },
+      { "nvim-treesitter/nvim-treesitter", build = ":TSUpdate" },
+      { "3rd/image.nvim", opts = { processor = "magick_cli" } },
+    },
+  },
 }
 ```
 
-With lazy.nvim, add the same plugin spec. Run `:Lazy sync` and restart Neovim
-after installation. Missing tools need confirmation and may need sudo.
+Run `:Lazy sync`, then `:IpynbInstall` and restart Neovim.
+See [installation details](doc/install.md) for system requirements and image setup.
+
+## LazyVim integrations
+
+The required plugins below are declared in the spec above.
+
+| Plugin | Use |
+| --- | --- |
+| [jupytext.nvim](https://github.com/goerz/jupytext.nvim) | Read and write notebook files. |
+| [quarto.nvim](https://github.com/quarto-dev/quarto-nvim) | Required by the notebook setup. |
+| [otter.nvim](https://github.com/jmbuhr/otter.nvim) | Provides embedded code buffers for language tools. |
+| [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) | Install the Markdown and Python parsers. |
+| [image.nvim](https://github.com/3rd/image.nvim) | Render plots with the default image provider. |
+
+The following integrations are optional and use your existing plugin settings.
+
+| Plugin | Use |
+| --- | --- |
+| [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) | Render notebook prose with your Markdown settings. |
+| [conform.nvim](https://github.com/stevearc/conform.nvim) and [Neovim](https://neovim.io) LSP formatters | Format each code cell on save. |
+| [nvim-lint](https://github.com/mfussenegger/nvim-lint) | Run configured linters and show diagnostics through Otter. |
+| [snacks.nvim](https://github.com/folke/snacks.nvim) | Render floating plots; inline plots use [image.nvim](https://github.com/3rd/image.nvim). |
+| [blink.cmp](https://github.com/saghen/blink.cmp) | Close completion menus when notebook insert mode ends. |
+| [gitsigns.nvim](https://github.com/lewis6991/gitsigns.nvim) | Skip signs in notebook buffers. |
+| [mini.hipatterns](https://github.com/nvim-mini/mini.hipatterns) | Keep inline color previews readable over cell backgrounds. |
 
 ## Use
 
-Open a notebook with `nvim example.ipynb`. Notebook prose uses your existing
-render-markdown.nvim configuration when available. Cell labels sit in the code
-border, leaving your normal line numbers and relative numbers unchanged.
-The kernel name appears on one line. Use `zo` to edit the full metadata
-and `zc` to collapse it. Insert mode reveals the active cell's code fences and
-language name for editing. Code and output use the theme's code background,
-with the normal editor background between them.
+1. Open `nvim example.ipynb` and use `:Ipynb` for notebook actions.
+2. Save with `:w`; configured synchronous save hooks apply and outputs return on reopening.
+3. Python runs in the nearest project `.venv`, prepared on first execution.
+4. Use `zo` and `zc` for metadata; insert mode exposes the active cell's fences.
 
-```text
-:Ipynb or \n      Open the action menu
-\r                Run the current cell or visual selection
-Ctrl+Enter        Run the current cell
-Shift+Enter       Run and move to the next code cell
-\R                Run all cells
-\a                Run this cell and the cells above
-\b                Add a code cell below
-\m                Add a Markdown cell below
-\s                Interrupt execution
-\i                Restart the kernel and clear variables
-\o                Open full output
-\O                Close full output
-\x                Enlarge first image or open HTML in a browser
-:w                Save code and outputs
-:IpynbJupytext    Export, pair, and sync files
-:set mouse=a      Enable clicking plots
-Click a plot      Enlarge it
-Click More lines  Open the complete output or traceback
-q or Escape       Close the image or output window
+See [configuration and saving](doc/ipynb.txt) for settings and standalone environments.
 
-Default <localleader>: \
-Enter key combinations depend on your terminal.
-
-Saved outputs return when you reopen the notebook.
-Python notebooks use the project's .venv, set up on first execution.
-Set vim.g.ipynb_animations = false in your config to stop spinners for running
-cells.
-```
-
-Saving uses your configured synchronous save hooks for each cell's language,
-including Conform and LSP formatting. Your existing autosave settings apply.
-Configured nvim-lint tools receive embedded code, and Otter maps their diagnostics
-back to the notebook. Linters that need files require
-Otter's `buffers.write_to_disk`.
-The plugin does not select or install formatters or linters.
+[PyTorch](https://github.com/pytorch/pytorch) can use CUDA in your project kernel; notebook code selects GPU or CPU.
 
 ## Help
 
-Use `:checkhealth ipynb` to check setup and `:IpynbInstall` to repair or update it.
-Run `:help ipynb` for shortcuts, environments, and kernel settings.
-
-See [installation](doc/install.md), [Jupytext](doc/jupytext.md),
-[testing](native/README.md), or [report an issue](https://github.com/WhiteHades/ipynb.nvim/issues).
-
-See [credits](CREDITS.md) and the [GPL 3.0 license](LICENSE).
+Run `:checkhealth ipynb` to check setup or `:IpynbInstall` to repair it.
+See [Jupytext](https://github.com/mwouts/jupytext), [format help](doc/jupytext.md), [testing](native/README.md), [credits](CREDITS.md), or [report an issue](https://github.com/WhiteHades/ipynb.nvim/issues).
