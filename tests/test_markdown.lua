@@ -169,13 +169,39 @@ markdown.refresh(buffer)
 assert(not has_decoration(0) and not has_decoration(1), "empty cells must also expose both fences while editing")
 cells.current, native_ui.current, vim.api.nvim_get_mode = original_current, original_ui_current, original_get_mode
 
+vim.cmd("syntax enable")
+vim.bo[buffer].filetype = "markdown"
+vim.treesitter.start(buffer, "markdown")
+local syntax_loads = 0
+local syntax_probe = vim.api.nvim_create_autocmd("Syntax", { buffer = buffer, callback = function(ev)
+  if ev.match == "markdown" then syntax_loads = syntax_loads + 1 end
+end })
 markdown.start_highlight(buffer)
+assert(syntax_loads == 0 and vim.bo[buffer].syntax == "" and vim.b[buffer].ts_highlight,
+  "replacing the notebook highlighter must not temporarily reload Vim syntax")
 local query = vim.treesitter.highlighter.active[buffer]._queries.markdown._query
 for _, pattern in pairs(query._processed_patterns) do
   for _, directive in ipairs(pattern.directives) do
     assert(directive[1] ~= "conceal", "Tree-sitter must not conceal fenced code markers")
   end
 end
+local highlighter_new = vim.treesitter.highlighter.new
+local active_highlighter = vim.treesitter.highlighter.active[buffer]
+markdown.start_highlight(0)
+markdown.start_highlight()
+assert(vim.treesitter.highlighter.active[buffer] == active_highlighter,
+  "current-buffer aliases must reuse the notebook highlighter")
+active_highlighter.ipynb_fences = nil
+vim.treesitter.highlighter.new = function() error("simulated highlighter failure") end
+local highlighted, highlight_error = pcall(markdown.start_highlight)
+vim.treesitter.highlighter.new = highlighter_new
+assert(not highlighted and tostring(highlight_error):find("simulated highlighter failure", 1, true),
+  "failed highlighter construction must propagate its error")
+assert(syntax_loads == 1 and vim.bo[buffer].syntax == "markdown" and not vim.b[buffer].ts_highlight,
+  ("failed replacement must restore Vim syntax: loads=%d syntax=%s ts=%s")
+    :format(syntax_loads, vim.bo[buffer].syntax, vim.inspect(vim.b[buffer].ts_highlight)))
+vim.api.nvim_del_autocmd(syntax_probe)
+markdown.start_highlight(buffer)
 
 markdown.disable(buffer)
 assert(#vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, {}) == 0)

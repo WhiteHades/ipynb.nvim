@@ -13,6 +13,7 @@ local function restore_window(win, buf)
 end
 
 function M.start_highlight(buf)
+  if buf == nil or buf == 0 then buf = vim.api.nvim_get_current_buf() end
   local active = vim.treesitter.highlighter.active[buf]
   if active and active.ipynb_fences then return end
   if not highlight_query then
@@ -27,8 +28,18 @@ function M.start_highlight(buf)
     highlight_query = highlight_query:gsub('%(%#set!%s+conceal_lines%s+""%)', "")
   end
   local parser = assert(vim.treesitter.get_parser(buf, "markdown"))
-  vim.treesitter.stop(buf)
-  local highlighter = vim.treesitter.highlighter.new(parser, { queries = { markdown = highlight_query } })
+  local restore_syntax = active and vim.g.syntax_on == 1
+  -- Replacing a Tree-sitter highlighter does not need a temporary Vim syntax reload.
+  vim.api.nvim_cmd({ cmd = "lua", args = { ("vim.treesitter.stop(%d)"):format(buf) }, mods = { noautocmd = true } }, {})
+  local ok, highlighter = pcall(vim.treesitter.highlighter.new, parser, { queries = { markdown = highlight_query } })
+  if not ok then
+    if restore_syntax then
+      vim.api.nvim_buf_call(buf, function()
+        vim.api.nvim_exec_autocmds("FileType", { group = "syntaxset", buffer = buf, modeline = false })
+      end)
+    end
+    error(highlighter)
+  end
   highlighter.ipynb_fences = true
 end
 
