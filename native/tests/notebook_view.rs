@@ -27,6 +27,10 @@ fn notebook_opens_rendered_and_runs_from_its_cell_label() {
     fs::write(&script, r#"
 local result = {}
 local ok, err = xpcall(function()
+  if _G.LazyVim and not vim.g.did_very_lazy then
+    vim.g.did_very_lazy = true
+    vim.api.nvim_exec_autocmds('User', {pattern='VeryLazy', modeline=false})
+  end
   vim.wait(1000)
   local buf = vim.api.nvim_get_current_buf()
   assert((vim.g.ipynb_test_rpcs.code_spans or 0) == 0, 'opening repeated the preview span conversion')
@@ -38,6 +42,15 @@ local ok, err = xpcall(function()
   local function gutter() return {vim.wo.number, vim.wo.relativenumber, vim.wo.statuscolumn} end
   local initial_gutter = gutter()
   local markdown = require('ipynb.markdown')
+  local highlighter = assert(vim.treesitter.highlighter.active[buf])
+  local highlight_query = highlighter:get_query('markdown'):query()
+  local tree = assert(vim.treesitter.get_parser(buf, 'markdown'):parse()[1])
+  for capture, _, metadata in highlight_query:iter_captures(tree:root(), buf) do
+    assert(not metadata.conceal_lines and not (metadata[capture] or {}).conceal_lines,
+      'Markdown highlights hide fence rows and their anchored output')
+  end
+  assert(vim.treesitter.query.get('markdown', 'highlights').has_conceal_line,
+    'notebook highlighting must not change other Markdown buffers')
   local namespace = vim.api.nvim_get_namespaces()['ipynb-markdown']
   local function syntax() return vim.fn.execute('syntax list IpyNotebookCodeFence') end
   result.initial_syntax = syntax()
@@ -139,15 +152,23 @@ local ok, err = xpcall(function()
   result.raw_metadata = #vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {}) == 0
   markdown.enable(buf)
   result.source_unchanged = vim.deep_equal(before, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
-  local raw, late_completion
+  local insert_visible, late_completion
+  local insert_span = require('ipynb.cells').executable(buf)[1]
+  vim.api.nvim_win_set_cursor(0, {insert_span.begin[1] + 1, 0})
+  local insert_conversions = vim.g.ipynb_test_rpcs.code_spans or 0
   vim.defer_fn(function()
     markdown.enable(buf)
-    raw = vim.api.nvim_get_mode().mode == 'i'
-      and vim.fn.foldclosed(1) == -1
-      and #vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {}) == 0
-      and #vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces()['ipynb-cell-header'], 0, -1, {}) == 0
-    local prose = vim.api.nvim_get_namespaces()['render-markdown.nvim']
-    if prose then raw = raw and #vim.api.nvim_buf_get_extmarks(buf, prose, 0, -1, {}) == 0 end
+    insert_visible = vim.api.nvim_get_mode().mode == 'i'
+      and vim.fn.foldclosedend(1) == metadata_end
+      and #vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {}) > 0
+      and #vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces()['ipynb-cell-header'], 0, -1, {}) > 0
+    vim.api.nvim_buf_set_lines(buf, insert_span['end'][1] + 1, insert_span['end'][1] + 1, false, {'# inserted while editing'})
+    vim.api.nvim_exec_autocmds('TextChangedI', {buffer=buf})
+    local expanded = false
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {details=true})) do
+      if mark[2] == insert_span['end'][1] + 2 and mark[4].virt_text_pos == 'overlay' then expanded = true end
+    end
+    insert_visible = insert_visible and expanded and (vim.g.ipynb_test_rpcs.code_spans or 0) == insert_conversions
     if package.loaded['blink.cmp'] then
       local menu = require('blink.cmp.completion.windows.menu')
       local context = require('blink.cmp.completion.trigger.context').new({id=99999, providers={},
@@ -163,7 +184,7 @@ local ok, err = xpcall(function()
   end, 200)
   vim.api.nvim_feedkeys('i', 'nx!', false)
   vim.wait(200)
-  assert(raw, 'Insert mode did not expose raw metadata and fences')
+  assert(insert_visible, 'Insert mode must retain cell frames and grow them without converter calls')
   assert(vim.fn.foldclosedend(1) == metadata_end, 'metadata fold did not recover after Insert')
   if late_completion then
     late_completion()
@@ -217,6 +238,12 @@ local ok, err = xpcall(function()
   local cells = ui.cells(buf)
   local output_ns = vim.api.nvim_get_namespaces()['ipynb-native-output']
   vim.api.nvim_win_set_cursor(0, {span.begin[1] + 1, 0})
+  ui.refresh(buf)
+  local header_ns = vim.api.nvim_get_namespaces()['ipynb-cell-header']
+  local stationary_headers = vim.api.nvim_buf_get_extmarks(buf, header_ns, 0, -1, {details=true})
+  for _ = 1, 10 do require('ipynb.native').call('IpynbOnCursorMoved') end
+  assert(vim.deep_equal(stationary_headers, vim.api.nvim_buf_get_extmarks(buf, header_ns, 0, -1, {details=true})),
+    'cursor-only movement must not replace unchanged cell decorations')
   for _, state in ipairs({
     {'hold', true, false, 'Queued', 'Queued'}, {'running', true, false, 'Running', 'Running'},
     {'done', true, false, 'Done', 'Success'}, {'done', false, false, 'Failed', 'Fail'},
@@ -295,6 +322,119 @@ local ok, err = xpcall(function()
   assert(vim.deep_equal(ui.cells(previews[2]), other_preview), 'wiping one notebook changed another preview')
   assert(#ui.cells(previews[1]) == 0, 'wiped kernel-free notebook retained saved preview UI')
   assert(not vim.api.nvim_win_is_valid(preview_float), 'wiped notebook retained its output window')
+  local directory = vim.fn.fnamemodify(vim.env.IPYNB_VIEW_REPORT, ':h')
+  local relative = directory .. '/relative.ipynb'
+  vim.fn.writefile(vim.fn.readfile(directory .. '/view.ipynb', 'b'), relative, 'b')
+  vim.cmd('cd ' .. vim.fn.fnameescape(directory))
+  vim.cmd('edit relative.ipynb')
+  local saved_buf = vim.api.nvim_get_current_buf()
+  assert(vim.bo[saved_buf].buftype == '' and vim.b[saved_buf].autoformat == nil,
+    'notebooks must inherit normal save and autoformat settings')
+  local format_calls = 0
+  local format_group = vim.api.nvim_create_augroup('NotebookConfiguredFormatter', {})
+  vim.api.nvim_create_autocmd('BufWritePre', {group=format_group, pattern='*.py', callback=function(event)
+    assert(vim.bo[event.buf].filetype == 'python', 'code formatter received the wrong filetype')
+    format_calls = format_calls + 1
+    local text = vim.api.nvim_buf_get_lines(event.buf, 0, -1, false)
+    for index, line in ipairs(text) do text[index] = line:gsub('print%(  44  %)', 'print(44)') end
+    vim.api.nvim_buf_set_lines(event.buf, 0, -1, false, text)
+  end})
+  local span = require('ipynb.cells').executable(saved_buf)[1]
+  vim.api.nvim_buf_set_lines(saved_buf, span['end'][1] + 1, span['end'][1] + 1, false, {'print(  44  )'})
+  vim.api.nvim_exec_autocmds('TextChanged', {buffer=saved_buf})
+  local position = ui.positions(saved_buf)[1]
+  assert(position.source:find('print(  44  )', 1, true), 'paste was excluded from the cell source')
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(saved_buf, output_ns, 0, -1, {details=true})) do
+    assert(mark[2] > position['end'][1], 'paste left output inside the code fence')
+  end
+  vim.cmd('write')
+  vim.cmd('write')
+  assert(format_calls == 4, 'each save must use configured Python save hooks for both code cells')
+  assert(type(vim.b[saved_buf].mtime) == 'table' and not vim.bo[saved_buf].modified,
+    'repeated relative-path saves must retain the disk modification guard')
+  local saved = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
+  assert(table.concat(saved.cells[2].source):find('print(44)', 1, true), 'saved notebook lost pasted source')
+  vim.opt.rtp:append(vim.env.IPYNB_TEST_PLUGINS .. '/nvim-lint')
+  local lint = require('lint')
+  local configured = lint.linters_by_ft.python
+  lint.linters_by_ft.python = {'notebook_fixture'}
+  lint.linters.notebook_fixture = {
+    cmd='cat', stdin=true, args={}, stream='stdout',
+    parser=function(output)
+      assert(output:find('print(44)', 1, true), 'configured linter did not receive notebook code')
+      return {{lnum=span.begin[1],col=0,severity=vim.diagnostic.severity.WARN,message='configured notebook lint'}}
+    end,
+  }
+  vim.cmd('write')
+  assert(vim.wait(2000, function()
+    for _, diagnostic in ipairs(vim.diagnostic.get(saved_buf)) do
+      if diagnostic.message == 'configured notebook lint' then return true end
+    end
+  end, 10), 'configured Python lint diagnostics must appear on notebook source')
+  local disk_lint, write_to_disk = false, OtterConfig.buffers.write_to_disk
+  local embedded = require('otter.keeper').rafts[saved_buf].buffers.python
+  local embedded_path = vim.api.nvim_buf_get_name(embedded)
+  local no_write = vim.api.nvim_get_autocmds({event='BufWriteCmd',buffer=embedded})
+  for _, command in ipairs(no_write) do vim.api.nvim_del_autocmd(command.id) end
+  OtterConfig.buffers.write_to_disk = true
+  lint.linters.notebook_fixture.stdin = false
+  lint.linters.notebook_fixture.parser = function(output)
+    disk_lint = output:find('print(44)', 1, true) ~= nil
+    return {}
+  end
+  vim.cmd('write')
+  assert(vim.wait(2000, function() return disk_lint end, 10),
+    'configured disk linter must receive current code when Otter disk buffers are enabled')
+  OtterConfig.buffers.write_to_disk = write_to_disk
+  for _, command in ipairs(no_write) do
+    vim.api.nvim_create_autocmd('BufWriteCmd', {buffer=embedded,group=command.group,callback=command.callback})
+  end
+  vim.fn.delete(embedded_path)
+  lint.linters_by_ft.python = configured
+  local unchanged = table.concat(vim.fn.readfile(relative), '\n')
+  vim.api.nvim_create_autocmd('BufWritePre', {group=format_group, pattern='*.py', callback=function()
+    error('configured formatter failure')
+  end})
+  assert(not pcall(vim.cmd, 'write'), 'formatter failure must abort the notebook write')
+  assert(table.concat(vim.fn.readfile(relative), '\n') == unchanged, 'failed formatting changed the notebook file')
+  vim.api.nvim_del_augroup_by_id(format_group)
+  local outside = vim.fn.readfile(relative)
+  outside[#outside + 1] = ' '
+  vim.fn.writefile(outside, relative)
+  assert(not pcall(vim.cmd, 'write'), 'external changes must still block save')
+  local pixels, image_rows = 8, 8
+  package.loaded['ipynb.molten_load_image_nvim'] = {image_api={
+    from_file=function(_, opts) return opts.id end,
+    image_size=function() return {width=20, height=image_rows} end,
+    clear=function() end, render=function() end, refresh=function() end,
+    layout_key=function() return {pixels, pixels * 2} end,
+  }}
+  ui.configure({image_provider='image.nvim', image_location='both'})
+  ui.sync(saved_buf, {{id='font-resize',begin=span.begin,['end']=position['end'],status='done',
+    segments={{kind='image',path='/resize.png'}}}})
+  local next_rows
+  vim.api.nvim_create_autocmd('VimResized', {callback=function()
+    pixels, image_rows = pixels + 4, next_rows
+  end})
+  for _, rows in ipairs({4, 12, 6}) do
+    next_rows = rows
+    vim.api.nvim_exec_autocmds('VimResized', {})
+    assert(vim.wait(1000, function()
+      local marks = vim.api.nvim_buf_get_extmarks(saved_buf, output_ns, 0, -1, {details=true})
+      return #marks == 1 and #marks[1][4].virt_lines == rows + 2
+    end, 5), 'font resize must remeasure image space after the provider updates cell pixels')
+  end
+  assert(ui.show('font-resize'))
+  local float_buf
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local displayed = vim.api.nvim_win_get_buf(win)
+    if vim.bo[displayed].filetype == 'ipynb_output' then float_buf = displayed end
+  end
+  assert(float_buf and vim.api.nvim_buf_line_count(float_buf) == 7)
+  next_rows = 3
+  vim.api.nvim_exec_autocmds('VimResized', {})
+  assert(vim.wait(1000, function() return vim.api.nvim_buf_line_count(float_buf) == 4 end, 5),
+    'font resize must remeasure an open output float too')
 end, debug.traceback)
 result.error = not ok and err or nil
 vim.fn.writefile({vim.json.encode(result)}, vim.env.IPYNB_VIEW_REPORT)

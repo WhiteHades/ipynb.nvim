@@ -74,7 +74,7 @@ local function ensure_notebook_rendering(bufnr)
   vim.bo[bufnr].swapfile = false
   if vim.bo[bufnr].filetype ~= "markdown" then vim.bo[bufnr].filetype = "markdown" end
   vim.wo.conceallevel = 3
-  pcall(vim.treesitter.start, bufnr, "markdown")
+  pcall(require("ipynb.markdown").start_highlight, bufnr)
 
   local render_ok, render = pcall(require, "render-markdown")
   if render_ok then
@@ -320,10 +320,9 @@ local function activate_notebook_buffer(bufnr)
   end
 
   vim.b[bufnr].notebook_markdown = true
-  vim.b[bufnr].autoformat = false
   if vim.b[bufnr].completion == nil then vim.b[bufnr].completion = true end
   vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].buftype = "acwrite"
+  require("ipynb.notebook_io").attach(bufnr)
 
   if not vim.api.nvim_buf_is_valid(bufnr) or not is_ipynb_buffer(bufnr) then
     return
@@ -449,15 +448,23 @@ function M.setup(opts)
     vim.bo[ev.buf].buftype = "acwrite"
   end)
   autocmd({ "BufReadPost", "BufEnter" }, function(ev) activate_notebook_buffer(ev.buf) end)
-  autocmd({ "BufWinEnter", "BufWritePost", "InsertLeave", "TextChanged" }, function(ev)
+  autocmd({ "BufWinEnter", "BufWritePost", "InsertEnter", "InsertLeave", "TextChanged", "TextChangedI" }, function(ev)
     require("ipynb.markdown").enable(ev.buf)
+    require("ipynb.native_ui").refresh(ev.buf)
   end)
-  autocmd("InsertEnter", function(ev) require("ipynb.markdown").disable(ev.buf) end)
+  autocmd("BufWritePre", function(ev) require("ipynb.editor").format(ev.buf) end)
+  autocmd("BufWritePost", function(ev) require("ipynb.editor").lint(ev.buf) end)
   vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, { group = group, callback = function()
-    for _, win in ipairs(vim.api.nvim_list_wins()) do
-      local buf = vim.api.nvim_win_get_buf(win)
-      if is_ipynb_buffer(buf) then require("ipynb.markdown").refresh(buf) end
-    end
+    -- image.nvim updates terminal cell pixels in this same event.
+    vim.schedule(function()
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        if is_ipynb_buffer(buf) then
+          require("ipynb.markdown").refresh(buf)
+          require("ipynb.native_ui").refresh(buf)
+        end
+      end
+    end)
   end })
   vim.api.nvim_create_autocmd("OptionSet", { group = group,
     pattern = { "number", "relativenumber", "numberwidth", "statuscolumn", "signcolumn", "foldcolumn" },

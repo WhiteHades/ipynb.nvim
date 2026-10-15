@@ -594,7 +594,7 @@ function M.call(name, args, bang)
   if name == "IpynbHideOutput" then return ui().hide(true) end
   if name == "IpynbBufLeave" then return ui().hide(false) end
   if name == "IpynbOnCursorMoved" or name == "IpynbOnWinScrolled" or name == "IpynbUpdateInterface" then
-    if ui().refresh then ui().refresh(vim.api.nvim_get_current_buf()) end
+    if ui().refresh then ui().refresh(vim.api.nvim_get_current_buf(), name == "IpynbOnCursorMoved") end
     return
   end
   if name == "IpynbToggleVirtual" and bang then

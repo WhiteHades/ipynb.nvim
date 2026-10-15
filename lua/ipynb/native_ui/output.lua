@@ -5,6 +5,88 @@ return function(state, rich)
   local current_positions, source_window = state.current_positions, state.source_window
   local output_ns = state.output_ns
   local panels = require("ipynb.panels")
+  local mouse_maps = {}
+
+  local function active_mouse_map(buf, mode)
+    for _, map in ipairs(vim.list_extend(vim.api.nvim_buf_get_keymap(buf, mode), vim.api.nvim_get_keymap(mode))) do
+      if map.lhs == "<LeftMouse>" then return map end
+    end
+  end
+
+  local function clicked_output(buf, mouse)
+    if not mouse then return end
+    local buffer = state.buffers[buf]
+    if not buffer then return end
+    for _, cell in ipairs(buffer.order) do
+      local target = cell.ui.mouse_more
+      if target and valid_win(target.win) and cell.ui.virt_mark and target.win == mouse.winid then
+        local mark = vim.api.nvim_buf_get_extmark_by_id(buf, output_ns, cell.ui.virt_mark, { details = true })
+        if #mark > 0 then
+          local text = vim.api.nvim_buf_get_lines(buf, mark[1], mark[1] + 1, false)[1] or ""
+          local pos = vim.fn.screenpos(target.win, mark[1] + 1, math.max(1, #text))
+          local row
+          if pos.row > 0 then
+            row = pos.row
+          else
+            local info = vim.fn.getwininfo(target.win)[1]
+            if info and mark[1] == info.topline - 2 then
+              local top = vim.fn.screenpos(target.win, info.topline, 0)
+              row = info.winrow - #((mark[3] and mark[3].virt_lines) or {}) + top.row - info.winrow - 1
+            end
+          end
+          if row and mouse.screenrow == row + target.row then return cell end
+        end
+      end
+    end
+  end
+
+  local function install_mouse(buf)
+    local maps = mouse_maps[buf] or {}
+    mouse_maps[buf] = maps
+    for _, mode in ipairs({ "n", "i" }) do
+      local existing = active_mouse_map(buf, mode)
+      local map = maps[mode] or {}
+      if existing and existing.callback ~= map.handler then map.fallback = existing end
+      map.handler = function()
+        local ok, mouse = pcall(vim.fn.getmousepos)
+        local cell = ok and clicked_output(buf, mouse)
+        if cell then
+          vim.schedule(function() vim.cmd.stopinsert(); M.open(cell.id) end)
+          return "<Ignore>"
+        end
+        local fallback = map.fallback
+        if not fallback then return "<LeftMouse>" end
+        if fallback.callback then return fallback.callback() end
+        if fallback.expr == 1 or fallback.expr == true then
+          local ok, result = pcall(vim.api.nvim_eval, fallback.rhs)
+          if ok then return vim.api.nvim_replace_termcodes(tostring(result or ""), true, false, true) end
+        end
+        return vim.api.nvim_replace_termcodes(fallback.rhs or "<LeftMouse>", true, false, true)
+      end
+      maps[mode] = map
+      vim.keymap.set(mode, "<LeftMouse>", map.handler, {
+        buffer = buf, expr = true, silent = true, desc = "Open full notebook output",
+      })
+    end
+  end
+
+  local function output_end(cell)
+    local first, last = current_positions(cell)
+    if not first or not last then return end
+    local spans = vim.b[cell.buf].ipynb_code_spans
+    if vim.b[cell.buf].ipynb_code_spans_tick ~= vim.api.nvim_buf_get_changedtick(cell.buf) then
+      local ok, parsed = pcall(require("ipynb.cells").spans, cell.buf)
+      spans = ok and parsed or nil
+    end
+    if spans then
+      for _, span in ipairs(spans) do
+        if span.begin[1] <= first.line and last.line <= span["end"][1] then
+          return { line = span["end"][1], col = span["end"][2] }
+        end
+      end
+    end
+    return last
+  end
 
   local function panel_key(cell, kind)
     return ("ipynb-panel-output-%s-%s-%s"):format(cell.buf, cell.id, kind)
@@ -18,6 +100,7 @@ return function(state, rich)
     end
     cell.ui.virt_mark = nil
     cell.ui.virt_key = nil
+    cell.ui.mouse_more = nil
   end
 
   function M.close_float(cell, restore_source)
@@ -75,8 +158,8 @@ return function(state, rich)
       M.clear_virtual(cell)
       return
     end
-    local begin_pos, end_pos = current_positions(cell)
-    if not begin_pos or not end_pos then return end
+    local end_pos = output_end(cell)
+    if not end_pos then return end
     local win = source_window(cell.buf)
     if not valid_win(win) then return end
     local info = vim.fn.getwininfo(win)[1]
@@ -96,6 +179,10 @@ return function(state, rich)
       width = width,
       height = info.height,
     }, cell.buf, win, true)
+    cell.ui.mouse_more = nil
+    for index, line in ipairs(lines) do
+      if line:find("More lines", 1, true) then cell.ui.mouse_more = { win = win, row = index }; break end
+    end
     local virt_lines = {}
     for index, line in ipairs(lines) do
       local group = (index == 1 or index == #lines) and rich.border_group(cell) or "IpynbVirtualText"
@@ -112,6 +199,7 @@ return function(state, rich)
     for _, record in ipairs(rich.image_records(cell, "virt")) do pcall(record.api.render, record.id) end
     if #rich.image_records(cell, "virt") > 0 then rich.image_canvas(win, true) end
     if api.refresh then pcall(api.refresh) end
+    if cell.ui.mouse_more then install_mouse(cell.buf) end
   end
 
   local function source_relative_row(win, row)
@@ -146,7 +234,7 @@ return function(state, rich)
 
   local function reserve_float_space(cell, height)
     if not state.options.output_virt_lines and not state.options.cover_empty_lines then return end
-    local _, end_pos = current_positions(cell)
+    local end_pos = output_end(cell)
     if not end_pos then return end
     local row = end_pos.line + cover_offset(cell.buf, end_pos)
     if state.options.virt_lines_off_by_1 then row, height = row + 1, height - 1 end
@@ -159,7 +247,7 @@ return function(state, rich)
   end
 
   function M.render_float(cell, focus)
-    local _, end_pos = current_positions(cell)
+    local end_pos = output_end(cell)
     if not end_pos then return false end
     local float = cell.ui.float
     local source = float and float.source_win or source_window(cell.buf)
@@ -182,9 +270,11 @@ return function(state, rich)
       return false
     end
 
+    local api = rich.provider()
+    local layout = api.layout_key and api.layout_key() or {}
     local float_key = table.concat({
       cell.revision, state.config_revision, source, end_pos.line, end_pos.col,
-      info.width, info.height, info.topline,
+      info.width, info.height, info.topline, vim.inspect(layout),
     }, ":")
     if float and valid_win(float.win) and cell.ui.float_key == float_key then
       if focus then vim.cmd(("noautocmd call nvim_set_current_win(%d)"):format(float.win)) end
@@ -276,7 +366,6 @@ return function(state, rich)
     if graphical then panels.output(panel_key(cell, "float"), { buf = display_buf, win = float.win,
       float = true, group = rich.border_group(cell) }) end
     for _, record in ipairs(rich.image_records(cell, "float")) do pcall(record.api.render, record.id) end
-    local api = rich.provider()
     if api.refresh then pcall(api.refresh) end
     cell.ui.float_key = float_key
     if focus and valid_win(float.win) then

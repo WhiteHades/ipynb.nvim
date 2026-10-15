@@ -1,6 +1,24 @@
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("ipynb-markdown")
+local highlight_query
+
+function M.start_highlight(buf)
+  local active = vim.treesitter.highlighter.active[buf]
+  if active and active.ipynb_fences then return end
+  if not highlight_query then
+    local parts = {}
+    for _, path in ipairs(vim.treesitter.query.get_files("markdown", "highlights")) do
+      parts[#parts + 1] = table.concat(vim.fn.readfile(path), "\n")
+    end
+    -- Concealed fence rows also hide their borders and anchored virtual output.
+    highlight_query = table.concat(parts, "\n"):gsub('%(%#set!%s+conceal_lines%s+""%)', "")
+  end
+  local parser = assert(vim.treesitter.get_parser(buf, "markdown"))
+  vim.treesitter.stop(buf)
+  local highlighter = vim.treesitter.highlighter.new(parser, { queries = { markdown = highlight_query } })
+  highlighter.ipynb_fences = true
+end
 
 local bullet_cycle = { "●", "○", "■", "□", "◆", "◇" }
 
@@ -150,6 +168,10 @@ end
 local function metadata_fold(bufnr, close)
   local last = vim.b[bufnr].ipynb_frontmatter_end
   if not last then return end
+  if close and vim.api.nvim_get_current_buf() == bufnr
+    and vim.api.nvim_get_mode().mode:match("^[iR]") and vim.api.nvim_win_get_cursor(0)[1] <= last then
+    close = false
+  end
   for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
     vim.api.nvim_win_call(win, function()
       if not vim.wo.foldenable then return end
@@ -182,7 +204,7 @@ local function render(bufnr)
   if vim.b[bufnr].ipynb_markdown_render_tick == changedtick and vim.b[bufnr].ipynb_markdown_width == width then
     return
   end
-  if vim.b[bufnr].ipynb_markdown_render_tick ~= changedtick then
+  if vim.b[bufnr].ipynb_markdown_render_tick ~= changedtick and not vim.api.nvim_get_mode().mode:match("^[iR]") then
     pcall(require("ipynb.cells").executable, bufnr)
   end
 
@@ -288,14 +310,9 @@ function M.enable(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) then
     return
   end
-  if vim.api.nvim_get_current_buf() == bufnr and vim.api.nvim_get_mode().mode:match("^[iR]") then
-    M.disable(bufnr)
-    return
-  end
-
   for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
     vim.wo[win].conceallevel = 3
-    vim.wo[win].concealcursor = "nc"
+    vim.wo[win].concealcursor = "nic"
   end
 
   if vim.b[bufnr].ipynb_markdown_enabled ~= true then

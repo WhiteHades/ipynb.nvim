@@ -5,8 +5,8 @@ local pending, ready = {}, {}
 local closing = false
 
 function M.metrics(size)
-  local radius = size.cell_height
-  return radius, math.max(2, math.floor(size.cell_width * 0.25 + 0.5)),
+  local radius = size.cell_height * 0.7
+  return radius, math.max(1, math.floor(size.cell_width * 0.20 + 0.5)),
     radius * 0.75
 end
 

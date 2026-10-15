@@ -99,12 +99,12 @@ Code and output share your theme's code background. Without one, they use a
 darker Normal background, or stay transparent when Normal has no background.
 Moving into a code cell does not change its background.
 
-With Kitty graphics and ImageMagick, code and output use thicker pixel borders.
+With Kitty graphics and ImageMagick, code and output use thin pixel borders.
 Their curves and inset plot corners follow the terminal's cell size. Original
 images stay unchanged. Other image providers use plain terminal borders.
 
 Metadata uses a native fold with manual or expression folding. Normal movement
-skips the summary, and Insert mode opens the metadata for editing. Other fold
+skips the summary. Enter Insert mode on the summary to edit metadata. Other fold
 providers are left unchanged and show raw metadata.
 
 Cell numbers and execution counts appear in the code border's right corner.
@@ -116,11 +116,25 @@ Saving                                                       *ipynb-saving*
 
 :w saves code and outputs, including notebook metadata and attachments.
 Normal mode shows one metadata line. Use Insert mode to edit the full header.
+Code frames and cell labels remain visible in Insert mode and grow as you type.
 New outputs mark the notebook as unsaved. If a file changed elsewhere, resolve
 the conflict before saving. See |ipynb-jupytext| for paired files.
 
 Reopen a notebook to see saved outputs. A new or empty .ipynb starts with one
 empty code cell. Save model checkpoints separately from notebook outputs.
+
+The notebook uses normal save events and your existing autosave settings.
+Each code cell runs your configured synchronous BufWritePre hooks in a buffer
+with that cell's language and filename extension. Conform and attached LSP
+formatters use their existing configuration and autoformat settings. A hook
+error aborts the save. Asynchronous format-after-save hooks cannot change a
+notebook that has already been written.
+
+Otter maps LSP diagnostics to the notebook. Configured nvim-lint tools also run
+on save. Tools that read stdin work with in-memory code. File-only linters
+require Otter's buffers.write_to_disk=true setting, which creates its normal
+language files alongside the notebook. No formatter or linter is selected or
+installed by ipynb.nvim.
 
 Runtime                                                       *ipynb-rust*
 
@@ -196,7 +210,11 @@ See doc/jupytext.md for settings and workflows.
 
 Images                                                        *ipynb-images*
 
-Images fit the available space. Use image.nvim's max_width and max_height to
+Inline images fit within half the available width and 35% of the available
+height. Their layout updates when terminal cell dimensions change. Images
+remain visible when the editor loses focus; tmux visibility checks still keep
+them in their owning session and window.
+Use image.nvim's max_width and max_height to
 limit image size, or output.height and output.width to cap the output window.
 
 With :set mouse=a, click an image in Normal or Insert mode to open only the
@@ -205,5 +223,8 @@ clicked image in a centered terminal viewer. :IpynbImagePopup and
 within 85% of the editor and resizes with the terminal. Close with q or <Esc>.
 Existing mouse mappings take precedence. Other image providers use their own
 popup viewers.
+
+Click "More lines" to open the complete output or traceback. Alternatively,
+use <localleader>o from the cell. Close the output window with q or <Esc>.
 
  vim:tw=78:ts=8:ft=help:norl:

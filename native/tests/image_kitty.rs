@@ -179,7 +179,7 @@ fn plot_corners_preserve_aspect_ratio_inside_the_cell_canvas() {
 vim.opt.rtp:prepend(vim.env.IPYNB_TEST_ROOT)
 local style = require('ipynb.image_style')
 local radius, stroke, inner = style.metrics({cell_width=10, cell_height=22})
-assert(radius == 22 and stroke == 3 and inner < radius)
+assert(math.abs(radius - 15.4) < 0.001 and stroke == 2 and inner == radius * 0.75)
 local done = false
 style.rounded(vim.env.IPYNB_TEST_SOURCE, 640, 506, inner, 500, 400, function(path)
   assert(vim.uv.fs_copyfile(path, vim.env.IPYNB_TEST_RESULT))

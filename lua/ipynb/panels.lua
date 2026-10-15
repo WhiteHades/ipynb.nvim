@@ -102,10 +102,10 @@ local function draw(key, spec, win)
   local size = require("image.utils").term.get_size()
   local cw, ch = size.cell_width, size.cell_height
   local radius, stroke = require("ipynb.image_style").metrics(size)
-  local width, height = math.floor(shape.width * cw), math.floor(shape.height * ch)
+  local width, height = math.floor(shape.width * cw), math.floor(shape.full_height * ch)
   local full_height = shape.full_height * ch
   local left, right = cw / 2, width - cw / 2
-  local top, bottom = ch / 2 - shape.crop * ch, full_height - ch / 2 - shape.crop * ch
+  local top, bottom = ch / 2, full_height - ch / 2
   radius = math.min(radius, (right - left) / 2, (bottom - top) / 2)
   local color = vim.api.nvim_get_hl(0, { name = spec.group, link = false }).fg
     or vim.api.nvim_get_hl(0, { name = "Normal", link = false }).fg
@@ -136,13 +136,17 @@ local function draw(key, spec, win)
     "-strokewidth", tostring(stroke), "-draw", "path '" .. path .. "'" }
   local signature = vim.inspect(command)
   spec.keys = spec.keys or {}
-  spec.keys[win] = signature .. ":" .. shape.x .. ":" .. shape.y
-  local request = spec.keys[win]
+  local request = signature .. ":" .. vim.inspect(shape)
+  if spec.keys[win] == request then return end
+  spec.keys[win] = request
   require("ipynb.image_style").generate(signature, command, function(file)
     if not file or specs[key] ~= spec or not vim.api.nvim_win_is_valid(win) or spec.keys[win] ~= request
       or vim.api.nvim_win_get_buf(win) ~= spec.buf then return end
-    local identifier = api.from_file(file, { id = key .. ":" .. win, buffer = spec.buf, window = win, frame = shape })
-    if identifier then spec.images[win] = identifier; api.render(identifier) end
+    -- Kitty crops the cached full border as it moves through the viewport.
+    local frame = vim.tbl_extend("force", shape, { y = shape.y - shape.crop, height = shape.full_height })
+    local identifier = api.from_file(file, { id = key .. ":" .. win, buffer = spec.buf, window = win, frame = frame })
+    if identifier then spec.images[win] = identifier; api.render(identifier)
+    else spec.keys[win] = nil end
   end)
 end
 
@@ -175,7 +179,12 @@ end
 local function schedule()
   if scheduled then return end
   scheduled = true
-  vim.defer_fn(function() scheduled = false; M.refresh() end, 16)
+  vim.schedule(function()
+    scheduled = false
+    if not next(specs) or vim.v.exiting ~= vim.NIL then return end
+    vim.cmd("redraw")
+    M.refresh()
+  end)
 end
 
 function M.code(buf, ranges)
@@ -214,7 +223,7 @@ function M.fallback()
   if ui then ui.configure({}) end
 end
 
-vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized", "WinClosed", "BufWinEnter", "BufWinLeave", "FocusGained", "TabEnter", "ColorScheme" }, {
+vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized", "VimResized", "WinClosed", "BufWinEnter", "BufWinLeave", "FocusGained", "TabEnter", "ColorScheme" }, {
   group = vim.api.nvim_create_augroup("ipynb_panels", { clear = true }), callback = schedule,
 })
 

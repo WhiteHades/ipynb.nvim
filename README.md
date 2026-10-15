@@ -65,6 +65,7 @@ Shift+Enter       Run and move to the next code cell
 :IpynbJupytext    Export, pair, and sync files
 :set mouse=a      Enable clicking plots
 Click a plot      Enlarge it
+Click More lines  Open the complete output or traceback
 q or Escape       Close the image or output window
 
 Default <localleader>: \
@@ -74,6 +75,12 @@ Saved outputs return when you reopen the notebook.
 Python notebooks use the project's .venv, set up on first execution.
 Set vim.g.ipynb_animations = false in your config to stop running-cell spinners.
 ```
+
+Saving uses your configured synchronous save hooks for each cell's language,
+including Conform and LSP formatting. Your existing autosave settings apply.
+Configured nvim-lint tools receive embedded code, and Otter maps their diagnostics
+back to the notebook. File-only linters require Otter's `buffers.write_to_disk`.
+The plugin does not select or install formatters or linters.
 
 ## Help
 

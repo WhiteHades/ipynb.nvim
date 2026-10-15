@@ -60,7 +60,7 @@ Add to `~/.config/nvim/init.lua`, then restart Neovim:
 ```lua
 require("image").setup({
   processor = "magick_cli",
-  editor_only_render_when_focused = true,
+  editor_only_render_when_focused = false,
   tmux_show_only_in_active_window = true,
 })
 require("ipynb").setup()

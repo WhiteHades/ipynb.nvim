@@ -5,8 +5,8 @@ local images = {}
 local api = {}
 local term
 local backend_initialized = false
-local INLINE_WIDTH_FACTOR = 0.60
-local INLINE_HEIGHT_FACTOR = 0.50
+local INLINE_WIDTH_FACTOR = 0.50
+local INLINE_HEIGHT_FACTOR = 0.35
 
 -- image.nvim derives float bounds from screenpos(win, 1, 1), which becomes
 -- zero when line 1 is scrolled away. Notebook floats have real scrollable rows.
@@ -40,11 +40,11 @@ if ok then
   end)
 end
 
-local function covered_by_output(win)
+local function covered_by_float(win)
   local source = vim.fn.getwininfo(win)[1]
   local source_z = vim.api.nvim_win_get_config(win).zindex or 0
   for _, other in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if other ~= win and vim.bo[vim.api.nvim_win_get_buf(other)].filetype == "ipynb_output" then
+    if other ~= win then
       local config = vim.api.nvim_win_get_config(other)
       local info = vim.fn.getwininfo(other)[1]
       if config.relative ~= "" and (config.zindex or 50) > source_z and info.winrow < source.winrow + source.height
@@ -121,7 +121,7 @@ api.from_file = function(path, opts)
       if vim.api.nvim_win_get_tabpage(self.window) ~= vim.api.nvim_get_current_tabpage() then self:clear(); return end
       if not self.ipynb_frame and self.ipynb_row >= vim.api.nvim_buf_line_count(self.buffer) then self:clear(); return end
       local config = vim.api.nvim_win_get_config(self.window)
-      if covered_by_output(self.window) then
+      if covered_by_float(self.window) then
         self:clear()
         return
       end
@@ -311,14 +311,15 @@ local refresh_pending = false
 api.refresh = function()
   if refresh_pending then return end
   refresh_pending = true
-  -- screenpos still describes the previous grid immediately after replacing
-  -- virtual output. Read it once Neovim has drawn the new extmarks.
-  vim.defer_fn(function()
+  vim.schedule(function()
     refresh_pending = false
+    if not next(images) or vim.v.exiting ~= vim.NIL then return end
+    -- Apply virtual-line changes before measuring their screen positions.
+    vim.cmd("redraw")
     for id, img in pairs(images) do
       if img.ipynb_active then render(id) end
     end
-  end, 16)
+  end)
 end
 
 api.render = function(id)
@@ -327,7 +328,7 @@ api.render = function(id)
   api.refresh()
 end
 
-vim.api.nvim_create_autocmd({ "WinScrolled", "WinClosed", "WinResized", "FocusGained", "TabEnter" }, {
+vim.api.nvim_create_autocmd({ "WinScrolled", "WinNew", "WinClosed", "WinResized", "BufWinEnter", "FocusGained", "TabEnter" }, {
   group = vim.api.nvim_create_augroup("ipynb_image_placements", { clear = true }),
   callback = function()
     vim.schedule(api.refresh)

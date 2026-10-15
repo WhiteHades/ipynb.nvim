@@ -23,7 +23,7 @@ return {
       { "3rd/image.nvim", opts = { processor = "magick_cli", scale_factor = 2.0,
         max_width_window_percentage = 95, max_height_window_percentage = 85,
         window_overlap_clear_enabled = false,
-        editor_only_render_when_focused = true, tmux_show_only_in_active_window = true,
+        editor_only_render_when_focused = false, tmux_show_only_in_active_window = true,
         integrations = { markdown = { only_render_image_at_cursor = false,
           only_render_image_at_cursor_mode = "inline", floating_windows = true } },
       } },

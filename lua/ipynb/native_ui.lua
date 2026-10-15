@@ -106,6 +106,10 @@ local function current_positions(cell)
   local begin_pos = extmark_position(cell.buf, cell.ui.begin_mark)
   local end_pos = extmark_position(cell.buf, cell.ui.end_mark)
   if not begin_pos or not end_pos then return nil end
+  if cell.ui.end_fence then
+    end_pos.line = math.max(begin_pos.line, end_pos.line - 1)
+    end_pos.col = #(vim.api.nvim_buf_get_lines(cell.buf, end_pos.line, end_pos.line + 1, false)[1] or "")
+  end
   return begin_pos, end_pos
 end
 
@@ -190,7 +194,7 @@ local function destroy_cell(cell)
   end
 end
 
-local function refresh(buf, force)
+local function refresh(buf, force, cursor_only)
   if view.shutting_down then return end
   local state = buffers[buf]
   if not state or not valid_buf(buf) then return end
@@ -211,15 +215,18 @@ local function refresh(buf, force)
   local selected_id = selected and tostring(selected.id) or nil
   if state.selected_id ~= selected_id then
     local previous = state.selected_id and state.by_id[state.selected_id] or nil
-    if previous then output.close_float(previous, false) end
+    if previous and output.close_float(previous, false) then output.show_virtual(previous, false) end
     if not state.selected_id and selected and view.options.auto_open_output then output.render_float(selected, false) end
     state.selected_id = selected_id
   end
+  local changedtick = vim.api.nvim_buf_get_changedtick(buf)
+  if cursor_only and state.changedtick == changedtick then return end
   for _, cell in ipairs(state.order) do
     output.show_virtual(cell, force)
     if cell.ui.float and valid_win(cell.ui.float.win) then output.render_float(cell, false) end
   end
   require("ipynb.cell_header").refresh(buf)
+  state.changedtick = changedtick
 end
 
 function M.configure(opts)
@@ -258,6 +265,12 @@ function M.sync(buf, cells)
       if not cell then
         local begin_pos = normalize_position(incoming.begin)
         local end_pos = normalize_position(incoming["end"])
+        local opening = begin_pos.line > 0 and vim.api.nvim_buf_get_lines(buf, begin_pos.line - 1, begin_pos.line, false)[1] or ""
+        local ending = vim.api.nvim_buf_get_lines(buf, end_pos.line, end_pos.line + 2, false)
+        local end_fence = begin_pos.col == 0 and end_pos.col == #(ending[1] or "")
+          and opening:match("^```%s*[%w_+-]+") ~= nil and (ending[2] or ""):match("^```%s*$") ~= nil
+        -- Anchor whole cells to their closing fence so linewise paste after EOF expands them.
+        if end_fence then end_pos = { line = end_pos.line + 1, col = 0 } end
         cell = {
           id = incoming.id,
           buf = buf,
@@ -265,6 +278,7 @@ function M.sync(buf, cells)
           ui = {
             begin_mark = set_position(buf, begin_pos, nil, false),
             end_mark = set_position(buf, end_pos, nil, true),
+            end_fence = end_fence,
             hidden = false,
             images = { virt = {}, float = {} },
           },
@@ -405,11 +419,11 @@ function M.shutdown()
   for buf in pairs(buffers) do M.clear(buf) end
 end
 
-function M.refresh(buf)
+function M.refresh(buf, cursor_only)
   if view.shutting_down then return end
   buf = number(buf, vim.api.nvim_get_current_buf())
   if buffers[buf] then
-    refresh(buf, false)
+    refresh(buf, false, cursor_only)
     return
   end
   for _, state in pairs(buffers) do

@@ -39,6 +39,7 @@ local function set_filetype(jupytext, path, metadata, bufnr)
 end
 
 local function open_notebook(jupytext, path, bufnr)
+  path = vim.fn.fnamemodify(path, ":p")
   if bufnr == 0 then bufnr = vim.api.nvim_get_current_buf() end
   vim.b[bufnr].ipynb_code_spans_read = nil
   -- :edit! replaces the buffer before the converter replies. Old extmarks
@@ -73,6 +74,7 @@ local function open_notebook(jupytext, path, bufnr)
 end
 
 local function write_notebook(jupytext, path, _metadata, bufnr)
+  path = vim.fn.fnamemodify(path, ":p")
   local in_place = write_in_place(path, bufnr)
   local expected_mtime = in_place and vim.b[bufnr].mtime or vim.NIL
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -105,6 +107,26 @@ function M.setup(jupytext)
     end
     return original_write(path, metadata, bufnr)
   end
+end
+
+function M.attach(buf)
+  local path = vim.api.nvim_buf_get_name(buf)
+  if not state or not fast_path(state.jupytext, path) then return end
+  vim.bo[buf].buftype = "acwrite"
+  local group = vim.api.nvim_create_augroup("JupytextPlugin" .. buf, { clear = false })
+  if #vim.api.nvim_get_autocmds({ event = "BufWriteCmd", buffer = buf, group = group }) == 0 then return end
+  vim.api.nvim_clear_autocmds({ event = "BufWriteCmd", buffer = buf, group = group })
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    buffer = buf, group = group, nested = true,
+    callback = function(event)
+      vim.api.nvim_buf_call(buf, function()
+        vim.api.nvim_exec_autocmds("BufWritePre", { pattern = event.file, modeline = false })
+        write_notebook(state.jupytext, event.file, nil, buf)
+        vim.api.nvim_exec_autocmds("BufWritePost", { pattern = event.file, modeline = false })
+      end)
+    end,
+  })
+  vim.bo[buf].buftype = ""
 end
 
 return M

@@ -35,7 +35,7 @@ assert(#vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, {}) == 0)
 assert(vim.b[buffer].ipynb_markdown_render_tick == nil)
 markdown.enable(buffer)
 assert(#vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, {}) > 0,
-  "enabling after insert-mode disable should force a render")
+  "enabling after explicit disable should force a render")
 
 vim.api.nvim_buf_delete(buffer, { force = true })
 print("pass: markdown render caching and re-enable behavior")

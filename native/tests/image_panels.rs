@@ -67,7 +67,13 @@ assert(#pending == 2)
 pending[2].done('visible.png')
 assert(#created == 1 and #rendered == 1, 'unchanged visible request must render')
 panels.refresh()
+assert(#pending == 2, 'unchanged panel geometry must not queue another image')
+vim.api.nvim_win_set_cursor(win, {2, 0})
+vim.fn.winrestview({topline=2, lnum=2, col=0})
+vim.cmd('redraw')
+panels.refresh()
 assert(#pending == 3)
+assert(vim.deep_equal(pending[2].command, pending[3].command), 'scrolling must reuse the full border bitmap')
 -- BufReadCmd temporarily empties the buffer while its converter is running.
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, {''})
 panels.refresh()
@@ -125,6 +131,64 @@ assert(placements == before and not plot.is_rendered and plot.ipynb_active,
 vim.cmd('tabprevious')
 vim.cmd('redraw')
 assert(vim.wait(1000, function() return placements > before end, 5), 'TabEnter must restore the active plot')
+
+local popup_buf = vim.api.nvim_create_buf(false, true)
+local before_popup, before_clear = placements, clears
+local popup = vim.api.nvim_open_win(popup_buf, false, {
+  relative='editor', row=3, col=4, width=10, height=3, zindex=200, border='rounded',
+})
+vim.bo[popup_buf].filetype = 'which_key'
+vim.cmd('redraw')
+assert(vim.wait(1000, function() return clears > before_clear end, 5),
+  'opening WhichKey must hide terminal graphics without moving the notebook cursor')
+plot:render()
+assert(placements == before_popup and not plot.is_rendered, 'popup must stay above async image redraws')
+vim.api.nvim_win_close(popup, true)
+assert(vim.wait(1000, function() return placements > before_popup end, 5), 'closing popup must restore graphics')
+
+local medium = plot_api.from_file('medium.png', {
+  id='medium', buffer=buf, window=win, render_offset_top=1, max_width=80, max_height=40,
+})
+plot.ipynb_source_width, plot.ipynb_source_height = 4000, 3000
+for _, pixels in ipairs({8, 16, 6}) do
+  package.loaded['image.utils'].term.get_size = function() return {cell_width=pixels,cell_height=pixels*2} end
+  local size = plot_api.image_size(medium)
+  assert(size.width > 0 and size.width <= 40 and size.height > 0 and size.height <= 14,
+    'inline plots must remain medium sized at different font sizes')
+  local aspect = size.width / (size.height * 2)
+  assert(math.abs(aspect - 4/3) < 0.1, 'font resize must preserve plot aspect ratio within cell rounding')
+end
+
+local ui = require('ipynb.native_ui')
+vim.g.ipynb_image_provider = 'none'
+ui.configure({image_provider='none', virt_lines_off_by_1=true})
+local notebook = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_set_current_buf(notebook)
+vim.api.nvim_buf_set_lines(notebook, 0, -1, false, {'```python', '', '```', '', 'prose'})
+ui.sync(notebook, {{id=1, begin={1,0}, ['end']={1,0}, status='new', segments={}}})
+-- Normal-mode linewise paste appends after the empty cell's original end.
+vim.api.nvim_buf_set_lines(notebook, 2, 2, false, {'print(42)', string.rep('x', 200)})
+ui.refresh(notebook)
+local position = ui.positions(notebook)[1]
+assert(vim.deep_equal(position['end'], {3,200}), 'pasted lines must extend the executable cell')
+assert(position.source == '\nprint(42)\n' .. string.rep('x',200), 'execution must include all pasted text')
+local output_ns = vim.api.nvim_get_namespaces()['ipynb-native-output']
+local marks = vim.api.nvim_buf_get_extmarks(notebook, output_ns, 0, -1, {details=true})
+assert(#marks == 1 and marks[1][2] == 4, 'output must stay below the closing fence')
+vim.api.nvim_buf_set_lines(notebook, 2, 4, false, {})
+ui.refresh(notebook)
+assert(vim.deep_equal(ui.positions(notebook)[1]['end'], {1,0}), 'deleting pasted lines must shrink the cell')
+vim.api.nvim_buf_set_lines(notebook, 1, 1, false, {'print(0)'})
+assert(vim.deep_equal(ui.positions(notebook)[1].begin, {1,0}), 'paste before the first line must remain inside the cell')
+ui.clear(notebook)
+vim.api.nvim_buf_set_lines(notebook, 0, -1, false, {'```python', 'print(1)', 'print(2)', '```'})
+vim.b[notebook].ipynb_code_spans = {{begin={1,0}, ['end']={2,8}}}
+vim.b[notebook].ipynb_code_spans_tick = vim.api.nvim_buf_get_changedtick(notebook)
+ui.sync(notebook, {{id=2, begin={1,0}, ['end']={1,8}, status='done', lines={'1'}}})
+assert(vim.deep_equal(ui.positions(notebook)[1]['end'], {1,8}), 'line and visual execution must keep their selection bounds')
+marks = vim.api.nvim_buf_get_extmarks(notebook, output_ns, 0, -1, {details=true})
+assert(#marks == 1 and marks[1][2] == 3, 'selection output must stay outside the containing code block')
+ui.shutdown()
 "#,
     )
     .unwrap();
