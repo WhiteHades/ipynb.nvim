@@ -563,6 +563,8 @@ fn opening_optional_pairs_does_not_run_external_converters() -> Result<()> {
         format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
     )?;
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
+    let pandoc = bin.join("pandoc");
+    std::fs::copy(&executable, &pandoc)?;
     let wrapper = directory.path().join("python");
     let python = std::env::var("IPYNB_TEST_PYTHON").unwrap_or_else(|_| "python3".into());
     std::fs::write(
@@ -590,6 +592,11 @@ fn opening_optional_pairs_does_not_run_external_converters() -> Result<()> {
     let read = engine.read(&json!({"path":path}))?;
     assert_eq!(read["paired_changed"], json!([paired]));
     assert!(!marker.exists());
+    engine.jupytext(&json!({"action":"info","path":path,"buf":1,"text":read["text"]}))?;
+    assert!(
+        marker.exists(),
+        "explicit format discovery must retain access to optional tools"
+    );
     Ok(())
 }
 

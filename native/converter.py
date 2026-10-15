@@ -9,11 +9,24 @@ jupytext, nbformat, and the optional rich-output renderers.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 from typing import Any
 
-import jupytext_adapter
+# Jupytext probes Pandoc while importing its format registry. Ordinary notebook
+# reads must not execute optional tools from PATH.
+with TemporaryDirectory(dir=os.environ.get("IPYNB_CONVERTER_TMPDIR")) as import_path:
+    original_path = os.environ.get("PATH")
+    try:
+        os.environ["PATH"] = import_path
+        import jupytext_adapter
+    finally:
+        if original_path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = original_path
 
 
 def _text(value: Any) -> str:

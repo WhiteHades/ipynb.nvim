@@ -175,16 +175,25 @@ def info_request(request: dict[str, Any]) -> dict[str, Any]:
             "pairs": _pairs(notebook, path, config), "formats": formats}
 
 
+def _prepare_external_format(fmt: dict[str, Any]) -> None:
+    if fmt.get("format_name") == "pandoc":
+        from jupytext.pandoc import pandoc_version
+
+        get_format_implementation(".md", "pandoc").current_version_number = pandoc_version()
+
+
 def _format(spec: Any, notebook: Any) -> dict[str, Any]:
     if not isinstance(spec, (str, dict)) or not spec:
         raise ValueError("a Jupytext format is required")
     fmt = long_form_one_format(deepcopy(spec), notebook.metadata)
+    _prepare_external_format(fmt)
     if fmt["extension"] != ".ipynb":
         get_format_implementation(fmt["extension"], fmt.get("format_name"))
     return fmt
 
 
 def _write(notebook: Any, path: str, fmt: dict[str, Any], config: Any) -> dict[str, Any]:
+    _prepare_external_format(fmt)
     if fmt["extension"] == ".ipynb":
         return {"path": path, "notebook": deepcopy(notebook)}
     content = jupytext.writes(deepcopy(notebook), fmt=deepcopy(fmt), config=config)
@@ -253,6 +262,7 @@ def action_request(request: dict[str, Any]) -> dict[str, Any]:
             selected = next((pair for pair in pairs if pair["path"] == source), None)
             if selected is None:
                 raise ValueError("sync source must belong to the notebook's resolved pairs")
+            _prepare_external_format(selected["fmt"])
             inputs = jupytext.read(source, fmt=selected["fmt"], as_version=4, config=config)
             if selected["fmt"]["extension"] != ".ipynb":
                 check_file_version(inputs, source, str(path))
