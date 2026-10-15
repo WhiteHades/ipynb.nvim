@@ -30,16 +30,18 @@ local settings = {
   update = true,
   filetype = "markdown",
   new_template = "template.ipynb",
+  jupytext = "jupytext-fixture",
 }
 local original_reads, original_writes = 0, 0
 local jupytext = {
   get_option = function(name)
     return settings[name]
   end,
-  open_notebook = function()
+  read_file = function()
     original_reads = original_reads + 1
-    return "original-read"
+    return { "{}" }
   end,
+  get_metadata = function() return { from = "fallback" } end,
   write_notebook = function()
     original_writes = original_writes + 1
     return "original-write"
@@ -79,16 +81,36 @@ assert(original_writes == 0 and vim.g.rpc_write_calls == 2)
 vim.g.rpc_write_fail = 0
 
 settings.format = "py:percent"
-assert(jupytext.open_notebook("unsupported.ipynb", buffer) == "original-read")
+local system = vim.system
+local command_failed = false
+vim.system = function(command, opts)
+  assert(command[1] == "jupytext-fixture" and command[5] == "py:percent")
+  assert(vim.deep_equal(opts.stdin, { "{}" }))
+  return { wait = function() return { code = command_failed and 1 or 0, stdout = "print(1)\n", stderr = "fixture" } end }
+end
+assert(jupytext.open_notebook("unsupported.ipynb", buffer).from == "fallback")
+assert(vim.api.nvim_buf_get_lines(buffer, 0, -1, false)[1] == "print(1)")
 assert(vim.b[buffer].ipynb_read_kernel == nil)
 assert(jupytext.write_notebook("unsupported.ipynb", {}, buffer) == "original-write")
 assert(original_reads == 1 and original_writes == 1)
 assert(vim.g.rpc_read_calls == 1 and vim.g.rpc_write_calls == 2)
+command_failed = true
+assert(not pcall(jupytext.open_notebook, "unsupported.ipynb", buffer), "fallback conversion failure must propagate")
+assert(vim.b[buffer].ipynb_read_incomplete and not pcall(jupytext.write_notebook, path, {}, buffer))
+assert(original_writes == 1, "incomplete fallback reads must not reach the writer")
+assert(vim.api.nvim_buf_get_lines(buffer, 0, -1, false)[1] == "print(1)", "failed conversion must preserve buffer contents")
+command_failed = false
+settings.format = function(_, metadata) assert(metadata.from == "fallback"); return "py:percent" end
+local filetype = settings.filetype
+settings.filetype = function(_, format) assert(format == "py:percent"); return "markdown" end
+assert(jupytext.open_notebook("unsupported.ipynb", buffer).from == "fallback")
+assert(not vim.b[buffer].ipynb_read_incomplete, "a successful fallback read must restore saving")
+settings.filetype, vim.system = filetype, system
 
 settings.format = "md:markdown"
 vim.cmd("delfunction IpynbNotebookRead")
 assert(not pcall(jupytext.open_notebook, "missing-engine.ipynb", buffer))
-assert(original_reads == 1, "a missing engine must not silently use another converter")
+assert(original_reads == 3, "a missing engine must not silently use another converter")
 
 -- Remote functions exist only as FuncUndefined handlers until their first call.
 vim.api.nvim_create_autocmd("FuncUndefined", {
@@ -105,7 +127,7 @@ vim.api.nvim_create_autocmd("FuncUndefined", {
 assert(vim.fn.exists("*IpynbNotebookRead") == 0)
 assert(jupytext.open_notebook("lazy.ipynb", buffer).lazy == 1)
 assert(vim.b[buffer].ipynb_read_kernel == false)
-assert(original_reads == 1)
+assert(original_reads == 3)
 
 vim.fn.delete(path)
 print("pass: notebook IO success, failure, and fallback behavior")

@@ -180,8 +180,12 @@ local function start()
 end
 
 function M.request(method, params)
-  start()
   params = params or {}
+  if params.buf and (method == "write" or method == "export"
+    or (method == "jupytext" and params.action ~= "info")) then
+    require("ipynb.notebook_io").check_read(params.buf)
+  end
+  start()
   for attempt = 1, 2 do
     serial = serial + 1
     local id = serial

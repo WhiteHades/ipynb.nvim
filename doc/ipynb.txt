@@ -119,6 +119,7 @@ Normal mode shows one metadata line. Use zo to edit the full header.
 Insert mode reveals the active cell's fences and language name for editing.
 New outputs mark the notebook as unsaved. If a file changed elsewhere, resolve
 the conflict before saving. See |ipynb-jupytext| for paired files.
+After a failed load, writes stay blocked until a successful reload.
 
 Reopen a notebook to see saved outputs. A new or empty .ipynb starts with one
 empty code cell. Save model checkpoints separately from notebook outputs.

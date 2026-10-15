@@ -31,12 +31,46 @@ local function write_in_place(path, bufnr)
   return same_file(vim.api.nvim_buf_get_name(bufnr), path)
 end
 
-local function set_filetype(jupytext, path, metadata, bufnr)
+function M.check_read(bufnr)
+  if vim.b[bufnr].ipynb_read_incomplete then
+    error("Notebook did not finish loading; reload successfully before saving", 0)
+  end
+end
+
+local function set_filetype(jupytext, path, metadata, bufnr, format)
   local filetype = option(jupytext, "filetype")
   if type(filetype) == "function" then
-    filetype = filetype(vim.uv.fs_realpath(path), "md:markdown", metadata)
+    filetype = filetype(vim.uv.fs_realpath(path), format or "md:markdown", metadata)
   end
   vim.api.nvim_set_option_value("filetype", filetype, { buf = bufnr })
+end
+
+local function jupytext_command(command, input)
+  local result = vim.system(command, { text = true, stdin = input }):wait()
+  if result.code ~= 0 then
+    error("Jupytext command failed with status " .. result.code .. ": " .. (result.stderr or ""), 0)
+  end
+  return result.stdout
+end
+
+local function open_fallback(jupytext, path, bufnr)
+  local source = vim.uv.fs_realpath(path)
+  if source and option(jupytext, "autosync") then
+    jupytext_command({ option(jupytext, "jupytext"), "--sync", source })
+  end
+  local lines = jupytext.read_file(source or option(jupytext, "new_template"), true)
+  local metadata = jupytext.get_metadata(lines)
+  local format = option(jupytext, "format")
+  if type(format) == "function" then format = format(source, metadata) end
+  if format ~= "ipynb" then
+    local text = jupytext_command({ option(jupytext, "jupytext"), "--from", "ipynb",
+      "--to", format, "--output", "-" }, lines)
+    lines = vim.split(text:gsub("\n$", ""), "\n", { plain = true })
+  end
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  set_filetype(jupytext, path, metadata, bufnr, format)
+  vim.bo[bufnr].modified = false
+  return metadata
 end
 
 local function open_notebook(jupytext, path, bufnr)
@@ -74,6 +108,7 @@ end
 
 local function write_notebook(jupytext, path, _metadata, bufnr)
   if bufnr == 0 then bufnr = vim.api.nvim_get_current_buf() end
+  M.check_read(bufnr)
   path = vim.fn.fnamemodify(path, ":p")
   local in_place = write_in_place(path, bufnr)
   local expected_mtime = in_place and vim.b[bufnr].mtime or vim.NIL
@@ -96,17 +131,23 @@ end
 function M.setup(jupytext)
   if state and state.jupytext == jupytext then return end
 
-  local original_open = jupytext.open_notebook
   local original_write = jupytext.write_notebook
   state = { jupytext = jupytext }
   jupytext.open_notebook = function(path, bufnr)
+    if not bufnr or bufnr == 0 then bufnr = vim.api.nvim_get_current_buf() end
+    vim.b[bufnr].ipynb_read_incomplete = true
+    local result
     if fast_path(jupytext, path) then
-      return open_notebook(jupytext, path, bufnr or 0)
+      result = open_notebook(jupytext, path, bufnr)
+    else
+      vim.b[bufnr].ipynb_read_kernel = nil
+      result = open_fallback(jupytext, path, bufnr)
     end
-    vim.b[bufnr or 0].ipynb_read_kernel = nil
-    return original_open(path, bufnr)
+    vim.b[bufnr].ipynb_read_incomplete = nil
+    return result
   end
   jupytext.write_notebook = function(path, metadata, bufnr)
+    M.check_read(bufnr or 0)
     if fast_path(jupytext, path) then
       return write_notebook(jupytext, path, metadata, bufnr or 0)
     end
@@ -124,6 +165,7 @@ function M.attach(buf)
   vim.api.nvim_create_autocmd("BufWriteCmd", {
     buffer = buf, group = group, nested = true,
     callback = function(event)
+      M.check_read(buf)
       if writing[buf] then
         if not same_file(writing[buf].path, event.file) then error("Notebook save in progress; retry the other destination", 0) end
         writing[buf].again = true

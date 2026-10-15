@@ -487,6 +487,42 @@ local ok, err = xpcall(function()
   vim.cmd('edit!')
   vim.cmd('write')
   assert(vim.deep_equal(vim.b[saved_buf].mtime, vim.uv.fs_stat(relative).mtime), 'reload did not recover saving')
+  local loaded_disk = table.concat(vim.fn.readfile(relative), '\n')
+  local read_request = require('ipynb.native').request
+  require('ipynb.native').request = function(method, ...)
+    if method == 'read' then error('injected notebook read failure') end
+    return read_request(method, ...)
+  end
+  local read_ok = pcall(vim.cmd, 'edit!')
+  require('ipynb.native').request = read_request
+  assert(not read_ok, 'reload failure was not injected')
+  local write_ok, read_error = pcall(vim.cmd, 'write')
+  assert(not write_ok and tostring(read_error):find('did not finish loading', 1, true),
+    'a failed reload must block saving the incomplete buffer')
+  for _, operation in ipairs({{method='jupytext',action='sync',source='buffer'},{method='export'}}) do
+    local params = vim.tbl_extend('force', {buf=saved_buf,path=relative,text='',overwrite=true}, operation)
+    local request_ok, request_error = pcall(read_request, operation.method, params)
+    assert(not request_ok and tostring(request_error):find('did not finish loading', 1, true),
+      'failed reload must also block alternate notebook writers')
+  end
+  assert(table.concat(vim.fn.readfile(relative), '\n') == loaded_disk, 'failed reload allowed a destructive save')
+  vim.cmd('edit!')
+  vim.cmd('write')
+  assert(vim.deep_equal(vim.b[saved_buf].mtime, vim.uv.fs_stat(relative).mtime), 'successful reload must restore saving')
+  local jupytext = require('jupytext')
+  local format, command = jupytext.opts.format, jupytext.opts.jupytext
+  jupytext.opts.format, jupytext.opts.jupytext = 'py:percent', '/bin/false'
+  local fallback_ok = pcall(jupytext.open_notebook, relative, saved_buf)
+  jupytext.opts.jupytext = command
+  assert(not fallback_ok and vim.b[saved_buf].ipynb_read_incomplete, 'legacy converter failure must keep saving blocked')
+  assert(not pcall(vim.cmd, 'write'), 'legacy conversion failure allowed saving')
+  assert(table.concat(vim.fn.readfile(relative), '\n') == loaded_disk, 'legacy converter failure changed notebook bytes')
+  assert(jupytext.open_notebook(relative, saved_buf), 'legacy reader must recover after converter failure')
+  assert(table.concat(vim.api.nvim_buf_get_lines(saved_buf, 0, -1, false), '\n'):find('print(44)', 1, true),
+    'legacy conversion lost source')
+  assert(not vim.b[saved_buf].ipynb_read_incomplete)
+  jupytext.opts.format = format
+  vim.cmd('edit!')
   local pixels, image_rows = 8, 8
   package.loaded['ipynb.molten_load_image_nvim'] = {image_api={
     from_file=function(_, opts) return opts.id end,
