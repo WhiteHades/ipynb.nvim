@@ -48,27 +48,37 @@ pub(super) fn positioned_sources(
     path: Option<&Path>,
 ) -> Result<(Vec<String>, HashMap<u64, usize>)> {
     let marker_prefix = converter.marker_prefix(buffer).to_owned();
-    let mut marked = buffer.to_owned();
-    let lines: Vec<&str> = buffer.split('\n').collect();
+    let line_starts: Vec<usize> = std::iter::once(0)
+        .chain(buffer.match_indices('\n').map(|(offset, _)| offset + 1))
+        .collect();
     let mut insertions = Vec::new();
     for (id, begin) in starts {
-        let line = lines
+        let line_start = *line_starts
             .get(begin[0])
             .context("Output position is outside the buffer")?;
+        let line_end = line_starts
+            .get(begin[0] + 1)
+            .map_or(buffer.len(), |next_start| next_start - 1);
+        let line = &buffer[line_start..line_end];
         if !line.is_char_boundary(begin[1]) {
             bail!("Output position is outside a UTF-8 boundary");
         }
-        let offset = lines[..begin[0]]
-            .iter()
-            .map(|line| line.len() + 1)
-            .sum::<usize>()
-            + begin[1];
+        let offset = line_start + begin[1];
         insertions.push((offset, *id, format!("{marker_prefix}{id}__")));
     }
     insertions.sort_by_key(|(offset, _, _)| std::cmp::Reverse(*offset));
-    for (offset, _, marker) in &insertions {
-        marked.insert_str(*offset, marker);
+    let marker_bytes = insertions
+        .iter()
+        .map(|(_, _, marker)| marker.len())
+        .sum::<usize>();
+    let mut marked = String::with_capacity(buffer.len() + marker_bytes);
+    let mut cursor = 0;
+    for (offset, _, marker) in insertions.iter().rev() {
+        marked.push_str(&buffer[cursor..*offset]);
+        marked.push_str(marker);
+        cursor = *offset;
     }
+    marked.push_str(&buffer[cursor..]);
     let marker_ids: HashMap<_, _> = insertions
         .iter()
         .map(|(_, id, marker)| (marker.as_str(), *id))
