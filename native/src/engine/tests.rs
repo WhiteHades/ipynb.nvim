@@ -357,6 +357,47 @@ fn save_engine() -> Result<Engine> {
     )
 }
 
+#[test]
+fn initial_preview_reuses_verified_conversion_without_guessing_spans() -> Result<()> {
+    let directory = save_directory()?;
+    let path = directory.path().join("cached.ipynb");
+    let notebook = json!({"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[
+        {"id":"one","cell_type":"code","metadata":{},"source":"print(1)","execution_count":1,
+         "outputs":[{"output_type":"stream","name":"stdout","text":"one\n"}]},
+        {"id":"example","cell_type":"markdown","metadata":{},"source":"An example:\n\n```python\n\n```"},
+        {"id":"empty","cell_type":"code","metadata":{},"source":"","execution_count":2,"outputs":[]},
+        {"id":"two","cell_type":"code","metadata":{},"source":"print(1)","execution_count":3,
+         "outputs":[{"output_type":"stream","name":"stdout","text":"two\n"}]}]});
+    notebook::write_atomic(&path, &notebook, None)?;
+    let original = std::fs::read(&path)?;
+    let mut engine = save_engine()?;
+    let result = engine.read(&json!({"path":path,"template":""}))?;
+    let lines: Vec<_> = result["text"].as_str().unwrap().split('\n').collect();
+    let spans: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("```python"))
+        .map(|(row, _)| json!({"begin":[row+1,0],"end":[row+1,lines[row+1].len()]}))
+        .collect();
+    assert_eq!(spans.len(), 4);
+    engine.converter = Converter::new("/missing/ipynb/python", Path::new("unused"));
+    let params = json!({"path":path,"buf":1,"preview":true,"lines":lines,"spans":spans});
+    engine.import(&params)?;
+    assert_eq!(engine.cells.len(), 3);
+    assert_eq!(text(&engine.cells[0].outputs[0]["text"]), "one\n");
+    assert_eq!(text(&engine.cells[2].outputs[0]["text"]), "two\n");
+    // Once consumed, or if the buffer changed, use Jupytext's full span resolution.
+    assert!(engine.import(&params).is_err());
+    let mut engine = save_engine()?;
+    engine.read(&json!({"path":path,"template":""}))?;
+    engine.converter = Converter::new("/missing/ipynb/python", Path::new("unused"));
+    let mut changed = params.clone();
+    changed["lines"][0] = json!("changed");
+    assert!(engine.import(&changed).is_err());
+    assert_eq!(std::fs::read(&path)?, original);
+    Ok(())
+}
+
 fn save_directory() -> Result<tempfile::TempDir> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

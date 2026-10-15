@@ -28,6 +28,13 @@ impl std::fmt::Display for SourceComparison {
 }
 impl std::error::Error for SourceComparison {}
 
+struct ReadCache {
+    path: PathBuf,
+    modified: std::time::SystemTime,
+    notebook: Value,
+    text_digest: [u8; 32],
+}
+
 pub struct Engine {
     python: String,
     converter: Converter,
@@ -41,7 +48,7 @@ pub struct Engine {
     next_cell: u64,
     options: Value,
     assets: tempfile::TempDir,
-    read_cache: Option<(PathBuf, std::time::SystemTime, Value)>,
+    read_cache: Option<ReadCache>,
     paired: HashMap<PathBuf, jupytext::PairState>,
     dirty: BTreeSet<u64>,
     view_cache: HashMap<u64, Value>,

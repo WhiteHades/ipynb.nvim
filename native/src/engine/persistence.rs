@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::{Engine, matching::positioned_sources, point, text};
+use super::{Engine, ReadCache, matching::positioned_sources, point, text};
 use crate::notebook;
 
 pub(super) fn imported_status(count: &Value) -> &'static str {
@@ -14,6 +15,60 @@ pub(super) fn imported_status(count: &Value) -> &'static str {
     } else {
         "new"
     }
+}
+
+fn initial_positions(
+    notebook: &Value,
+    lines: &[String],
+    spans: &[Value],
+) -> Option<(Vec<String>, HashMap<u64, usize>)> {
+    let sources: Vec<_> = notebook["cells"]
+        .as_array()?
+        .iter()
+        .filter(|cell| cell["cell_type"] == "code")
+        .map(|cell| text(&cell["source"]))
+        .collect();
+    let advance = |protected: &mut bool, gap: &[String]| -> Option<()> {
+        for line in gap {
+            match line.as_str() {
+                "<!-- #region -->" if !*protected => *protected = true,
+                "<!-- #endregion -->" if *protected => *protected = false,
+                "<!-- #region -->" | "<!-- #endregion -->" => return None,
+                _ => {}
+            }
+        }
+        Some(())
+    };
+    let mut protected = false;
+    let mut cursor = 0;
+    let mut positions = HashMap::new();
+    for (index, span) in spans.iter().enumerate() {
+        let first = point(&span["begin"]);
+        let last = point(&span["end"]);
+        advance(&mut protected, lines.get(cursor..first[0])?)?;
+        let body = lines.get(first[0]..=last[0])?;
+        if body
+            .iter()
+            .any(|line| matches!(line.as_str(), "<!-- #region -->" | "<!-- #endregion -->"))
+        {
+            return None;
+        }
+        cursor = last[0].checked_add(1)?;
+        if protected {
+            continue;
+        }
+        let ordinal = positions.len();
+        let source = sources.get(ordinal)?;
+        if first[1] != 0 || last[1] != lines.get(last[0])?.len() || body.join("\n") != *source {
+            return None;
+        }
+        positions.insert(index as u64, ordinal);
+    }
+    advance(&mut protected, lines.get(cursor..)?)?;
+    if protected || positions.len() != sources.len() {
+        return None;
+    }
+    Some((sources, positions))
 }
 
 impl Engine {
@@ -47,7 +102,13 @@ impl Engine {
         self.remember_pairs(path, &result)?;
         self.read_cache = before
             .filter(|_| before == after)
-            .map(|mtime| (path.to_owned(), mtime, result["notebook"].take()));
+            .map(|modified| ReadCache {
+                path: path.to_owned(),
+                modified,
+                text_digest: Sha256::digest(result["text"].as_str().unwrap_or("").as_bytes())
+                    .into(),
+                notebook: result["notebook"].take(),
+            });
         Ok(
             json!({"text":result["text"], "metadata":result["metadata"], "paired_changed":result["divergent"]}),
         )
@@ -156,18 +217,18 @@ impl Engine {
 
     pub(super) fn import(&mut self, params: &Value) -> Result<Vec<Value>> {
         let path = Self::path(params)?;
-        let notebook = if params["notebook"].is_object() {
-            params["notebook"].clone()
+        let (notebook, read_digest) = if params["notebook"].is_object() {
+            (params["notebook"].clone(), None)
         } else {
             match self.read_cache.take() {
-                Some((cached_path, modified, notebook))
-                    if cached_path == path
+                Some(cached)
+                    if cached.path == path
                         && std::fs::metadata(path).and_then(|m| m.modified()).ok()
-                            == Some(modified) =>
+                            == Some(cached.modified) =>
                 {
-                    notebook
+                    (cached.notebook, Some(cached.text_digest))
                 }
-                _ => self.read_compatible_notebook(path)?,
+                _ => (self.read_compatible_notebook(path)?, None),
             }
         };
         let buf = params["buf"].as_u64().unwrap_or(0);
@@ -201,10 +262,28 @@ impl Engine {
                 .enumerate()
                 .map(|(index, span)| (index as u64, point(&span["begin"])))
                 .collect();
-            positioned_sources(&mut self.converter, &lines.join("\n"), &starts, Some(path))?
+            let buffer = lines.join("\n");
+            // Only an untouched read can reuse its verified cell ordering.
+            let initial = (params["preview"] == true
+                && read_digest == Some(Sha256::digest(buffer.as_bytes()).into()))
+            .then(|| initial_positions(&notebook, &lines, spans))
+            .flatten();
+            match initial {
+                Some(positions) => positions,
+                None => positioned_sources(&mut self.converter, &buffer, &starts, Some(path))?,
+            }
         } else {
             (Vec::new(), HashMap::new())
         };
+        let mut span_rows = vec![None; sources.len()];
+        for (index, span) in spans.into_iter().flatten().enumerate() {
+            if let Some(row) = positions
+                .get(&(index as u64))
+                .and_then(|ordinal| span_rows.get_mut(*ordinal))
+            {
+                row.get_or_insert(point(&span["begin"])[0]);
+            }
+        }
         let mut offset = 0;
         let mut ordinal = 0;
         if params["reset"] == true {
@@ -228,15 +307,12 @@ impl Engine {
             }
             let source = text(&nb["source"]);
             let code: Vec<&str> = source.split('\n').collect();
-            let start = if let Some(spans) = spans {
-                spans
-                    .iter()
-                    .enumerate()
-                    .find(|(index, _)| {
-                        positions.get(&(*index as u64)) == Some(&ordinal)
-                            && sources.get(ordinal) == Some(&source)
-                    })
-                    .map(|(_, span)| point(&span["begin"])[0])
+            let start = if spans.is_some() {
+                span_rows
+                    .get(ordinal)
+                    .copied()
+                    .flatten()
+                    .filter(|_| sources.get(ordinal) == Some(&source))
             } else {
                 (offset..lines.len()).find(|&i| {
                     i + code.len() <= lines.len()
