@@ -15,21 +15,13 @@
 
 ## Install
 
-Requires Neovim 0.12 or newer. For [LazyVim](https://www.lazyvim.org/), add this plugin spec to `~/.config/nvim/lua/plugins/ipynb.lua`:
+Requires Neovim 0.12 or newer. Add this plugin spec to your [lazy.nvim](https://github.com/folke/lazy.nvim) configuration:
 
 ```lua
 return {
-  {
-    "WhiteHades/ipynb.nvim",
-    lazy = false,
-    opts = {},
-    dependencies = {
-      "goerz/jupytext.nvim",
-      { "quarto-dev/quarto-nvim", dependencies = { "jmbuhr/otter.nvim" } },
-      { "nvim-treesitter/nvim-treesitter", build = ":TSUpdate" },
-      { "3rd/image.nvim", opts = { processor = "magick_cli" } },
-    },
-  },
+  "WhiteHades/ipynb.nvim",
+  lazy = false,
+  opts = {},
 }
 ```
 
@@ -49,7 +41,14 @@ See [configuration and saving](doc/ipynb.txt) for settings and standalone enviro
 
 ## Editor plugins
 
-Works with [Snacks quickfile](https://github.com/folke/snacks.nvim), [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim), [blink.cmp](https://github.com/saghen/blink.cmp), [conform.nvim](https://github.com/stevearc/conform.nvim), and [nvim-lint](https://github.com/mfussenegger/nvim-lint).
+| Plugin | Integration |
+| --- | --- |
+| [Snacks quickfile](https://github.com/folke/snacks.nvim) | Preserves notebook highlighting during quickfile startup. |
+| [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) | Uses its configured renderer for notebook prose. |
+| [blink.cmp](https://github.com/saghen/blink.cmp) | Keeps completion menus aligned with the active notebook insert session. |
+| [conform.nvim](https://github.com/stevearc/conform.nvim) | Runs configured synchronous save formatters on code cells. |
+| [nvim-lint](https://github.com/mfussenegger/nvim-lint) | Runs configured linters on save for notebook code cells. |
+| [which-key.nvim](https://github.com/folke/which-key.nvim) | Shows notebook key descriptions in its popup. |
 
 ## Help
 
