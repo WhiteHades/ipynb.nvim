@@ -38,8 +38,17 @@ local ok, err = xpcall(function()
   end
   ipynb.init({ images = false })
   ipynb.install()
-  assert(commands[1][3] == '--check' and commands[2][1] == 'uv' and commands[2][5] == '3.15.0')
+  assert(commands[1][3] == '--check' and commands[2][1] == 'uv' and commands[2][5] == '>=3.11')
   assert(commands[3][1] == 'cargo' and #commands == 3)
+
+  local executable = vim.fn.executable
+  local helper = vim.fn.stdpath('data') .. '/ipynb.nvim/venv/bin/python'
+  vim.fn.executable = function(path) return path == helper and 1 or executable(path) end
+  commands = {}
+  ipynb.install()
+  assert(commands[2][1] == helper and commands[2][2]:match('/scripts/setup.py$') and #commands == 3,
+    'repair must reuse the working helper without selecting or downloading another Python')
+  vim.fn.executable = executable
 
   commands, ready = {}, false
   local installed, failure = pcall(ipynb.install)

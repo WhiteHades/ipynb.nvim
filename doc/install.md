@@ -51,9 +51,11 @@ First, install the prerequisites with the standalone helper. Then, on Linux, run
 ```sh
 git clone https://github.com/WhiteHades/ipynb.nvim \
   ~/.local/share/nvim/site/pack/ipynb/start/ipynb.nvim
-uv run --no-project --python 3.15.0 -- \
+uv run --no-project --python ">=3.11" -- \
   ~/.local/share/nvim/site/pack/ipynb/start/ipynb.nvim/scripts/install-native.py
 ```
+
+Existing helpers keep their Python interpreter.
 
 Add to `~/.config/nvim/init.lua`, then restart Neovim:
 

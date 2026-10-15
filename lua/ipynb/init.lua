@@ -392,8 +392,10 @@ end
 local function install_runtime()
   local venv = vim.fn.stdpath("data") .. "/ipynb.nvim/venv"
   if M.options.python == venv .. "/bin/python" then
-    local result = vim.system({ "uv", "run", "--no-project", "--python", "3.15.0", "--",
-      root .. "/scripts/setup.py", "--venv", venv }, { text = true }):wait()
+    local command = vim.fn.executable(M.options.python) == 1 and { M.options.python }
+      or { "uv", "run", "--no-project", "--python", ">=3.11", "--" }
+    vim.list_extend(command, { root .. "/scripts/setup.py", "--venv", venv })
+    local result = vim.system(command, { text = true }):wait()
     if result.code ~= 0 then error(result.stderr .. result.stdout) end
   else
     local result = vim.system({ M.options.python, "-c",

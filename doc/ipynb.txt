@@ -24,7 +24,7 @@ pkg-config, a C/C++ compiler, and tree-sitter-cli 0.26.1+. Inline plots need
 ImageMagick's magick command and a terminal such as Kitty or Ghostty.
 
 To prepare a custom helper from the plugin checkout, run: >sh
-  uv run --no-project --python 3.15.0 -- scripts/setup.py \
+  uv run --no-project --python ">=3.11" -- scripts/setup.py \
     --venv /path/to/helper/venv
 <
 To check host tools without installing them, run: >sh
