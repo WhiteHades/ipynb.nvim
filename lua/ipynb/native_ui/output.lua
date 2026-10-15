@@ -7,9 +7,8 @@ return function(state, rich)
   local mouse_maps = {}
 
   local function active_mouse_map(buf, mode)
-    for _, map in ipairs(vim.list_extend(vim.api.nvim_buf_get_keymap(buf, mode), vim.api.nvim_get_keymap(mode))) do
-      if map.lhs == "<LeftMouse>" then return map end
-    end
+    local map = vim.api.nvim_buf_call(buf, function() return vim.fn.maparg("<LeftMouse>", mode, false, true) end)
+    return next(map) and map or nil
   end
 
   local function clicked_output(buf, mouse)

@@ -254,7 +254,27 @@ local traceback = cell("done", false)
 traceback.id, traceback.segments = "traceback", nil
 traceback.lines = { "NameError", "Traceback (most recent call last):", "Cell In[2], line 15", "  failing line",
   "frame 5", "frame 6", "frame 7", "frame 8", "last traceback line" }
-assert(ui.sync(buf, { traceback }))
+local unrelated_mouse_buf = vim.api.nvim_create_buf(false, true)
+vim.keymap.set("n", "<LeftMouse>", function() error("another buffer's mouse handler was used") end,
+  { buffer = unrelated_mouse_buf, expr = true })
+local get_buffer_maps, get_global_maps = vim.api.nvim_buf_get_keymap, vim.api.nvim_get_keymap
+local mapping_scans = 0
+vim.api.nvim_buf_get_keymap = function(...)
+  mapping_scans = mapping_scans + 1
+  return get_buffer_maps(...)
+end
+vim.api.nvim_get_keymap = function(...)
+  mapping_scans = mapping_scans + 1
+  return get_global_maps(...)
+end
+vim.api.nvim_buf_call(unrelated_mouse_buf, function()
+  assert(ui.sync(buf, { traceback }))
+  assert(vim.api.nvim_get_current_buf() == unrelated_mouse_buf, "output refresh must preserve the current buffer")
+end)
+vim.api.nvim_buf_get_keymap, vim.api.nvim_get_keymap = get_buffer_maps, get_global_maps
+assert(vim.api.nvim_get_current_buf() == buf, "background output lookup must restore the original buffer")
+assert(mapping_scans == 0, "output click setup must not copy every mapping to find one mouse action")
+vim.api.nvim_buf_delete(unrelated_mouse_buf, { force = true })
 local trace_mark
 for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces()["ipynb-native-output"], 0, -1, { details = true })) do
   local more_row
