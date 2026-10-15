@@ -1,5 +1,4 @@
 local image_api = require("ipynb.molten_load_image_nvim").image_api
-local panels = require("ipynb.panels")
 
 local M = {}
 local active
@@ -19,7 +18,7 @@ local function config(width, height)
     col = math.max(0, math.floor((vim.o.columns - width_total) / 2)),
     width = width,
     height = height,
-    border = panels.available() and { " ", " ", " ", " ", " ", " ", " ", " " } or "rounded",
+    border = "rounded",
     title = " Ipynb Image ",
     title_pos = "center",
     style = "minimal",
@@ -40,7 +39,6 @@ local function close()
   if not viewer then return end
   active = nil
   clear_autocmds()
-  panels.remove(viewer.id .. "-panel")
 
   if viewer.identifier then image_api.clear(viewer.identifier) end
   if vim.api.nvim_win_is_valid(viewer.window) then
@@ -82,13 +80,10 @@ local function relayout()
   end
 
   local max_width, max_height = limit(vim.o.columns), limit(vim.o.lines)
-  local graphical = panels.available()
-  local inset_x = graphical and math.min(2, math.floor((max_width - 1) / 2)) or 0
-  local inset_y = graphical and math.min(1, math.floor((max_height - 1) / 2)) or 0
-  local padding = math.min(1, max_height - inset_y * 2 - 1)
+  local padding = math.min(1, max_height - 1)
   if viewer.identifier then image_api.clear(viewer.identifier) end
   -- Leave a row for Kitty's fractional-pixel rounding when space permits.
-  local identifier = add_image(viewer, max_width - inset_x * 2, max_height - inset_y * 2 - padding, inset_x, inset_y)
+  local identifier = add_image(viewer, max_width, max_height - padding, 0, 0)
   if not identifier then
     close()
     return false
@@ -101,12 +96,10 @@ local function relayout()
     close()
     return false
   end
-  local width = math.min(image_width + inset_x * 2, max_width)
-  local height = math.min(image_height + inset_y * 2 + padding, max_height)
+  local width = math.min(image_width, max_width)
+  local height = math.min(image_height + padding, max_height)
   fill_buffer(viewer.buffer, height)
   vim.api.nvim_win_set_config(viewer.window, config(width, height))
-  panels.output(viewer.id .. "-panel", { buf = viewer.buffer, win = viewer.window, float = true,
-    center_label = vim.fn.strdisplaywidth(" Ipynb Image "), group = "IpynbOutputBorder" })
   image_api.render(identifier)
   image_api.refresh()
   return true

@@ -4,7 +4,6 @@ return function(state, rich)
   local valid_buf, valid_win, number = state.valid_buf, state.valid_win, state.number
   local current_positions, source_window = state.current_positions, state.source_window
   local output_ns = state.output_ns
-  local panels = require("ipynb.panels")
   local mouse_maps = {}
 
   local function active_mouse_map(buf, mode)
@@ -96,12 +95,7 @@ return function(state, rich)
     return last
   end
 
-  local function panel_key(cell, kind)
-    return ("ipynb-panel-output-%s-%s-%s"):format(cell.buf, cell.id, kind)
-  end
-
   function M.clear_virtual(cell)
-    panels.remove(panel_key(cell, "virt"))
     rich.clear_images(cell, "virt")
     if cell.ui.virt_mark and valid_buf(cell.buf) then
       pcall(vim.api.nvim_buf_del_extmark, cell.buf, output_ns, cell.ui.virt_mark)
@@ -112,7 +106,6 @@ return function(state, rich)
   end
 
   function M.close_float(cell, restore_source)
-    panels.remove(panel_key(cell, "float"))
     rich.clear_images(cell, "float")
     local float = cell.ui.float
     if not float then return false end
@@ -202,8 +195,6 @@ return function(state, rich)
     if cell.ui.virt_mark then mark_options.id = cell.ui.virt_mark end
     cell.ui.virt_mark = vim.api.nvim_buf_set_extmark(cell.buf, output_ns, anchor.line, 0, mark_options)
     cell.ui.virt_key = key
-    panels.output(panel_key(cell, "virt"), { buf = cell.buf, win = win, first = anchor.line,
-      width = width, height = #lines, label = cell.ui.panel_label, group = rich.border_group(cell) })
     for _, record in ipairs(rich.image_records(cell, "virt")) do pcall(record.api.render, record.id) end
     if #rich.image_records(cell, "virt") > 0 then rich.image_canvas(win, true) end
     if api.refresh then pcall(api.refresh) end
@@ -265,8 +256,6 @@ return function(state, rich)
 
     local border = rich.border_with_highlight(vim.deepcopy(state.options.output_win_border), cell)
     local border_width, border_height = border_size(border)
-    local graphical = panels.available() and border_width == 2 and border_height == 2
-    if graphical then border = rich.border_with_highlight({ " ", " ", " ", " ", " ", " ", " ", " " }, cell) end
     local screen_height = info.height - border_height
     local available_height = math.min(screen_height, number(state.options.output_win_max_height, 999999))
     local available_width = math.min(info.width - border_width, number(state.options.output_win_max_width, 999999))
@@ -371,8 +360,6 @@ return function(state, rich)
     end
 
     reserve_float_space(cell, #lines + border_height)
-    if graphical then panels.output(panel_key(cell, "float"), { buf = display_buf, win = float.win,
-      float = true, group = rich.border_group(cell) }) end
     for _, record in ipairs(rich.image_records(cell, "float")) do pcall(record.api.render, record.id) end
     if api.refresh then pcall(api.refresh) end
     cell.ui.float_key = float_key

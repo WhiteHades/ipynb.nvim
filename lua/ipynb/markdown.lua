@@ -228,9 +228,7 @@ local function render(bufnr)
   end
   local in_code_block = false
   local fence_row = nil
-  local panels = require("ipynb.panels")
-  local graphical = panels.available()
-  local ranges, fence_label = {}, nil
+  local fence_label
 
   for index, line in ipairs(lines) do
     local row = index - 1
@@ -262,9 +260,7 @@ local function render(bufnr)
       fence_row = row
       fence_label = language_label(language)
       vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
-        virt_text = graphical and { { "   " .. fence_label, "IpyNotebookCodeLabel" },
-          { string.rep(" ", math.max(0, width - 3 - vim.fn.strdisplaywidth(fence_label))), "IpyNotebookCodeBlock" } }
-          or border("╭─", "╮", fence_label, width),
+        virt_text = border("╭─", "╮", fence_label, width),
         virt_text_pos = "overlay",
         hl_mode = "combine",
         line_hl_group = "IpyNotebookCodeBlock",
@@ -272,10 +268,8 @@ local function render(bufnr)
       })
     elseif line:match("^```%s*$") then
       if in_code_block and fence_row ~= nil then
-        ranges[#ranges + 1] = { first = fence_row, last = row, width = width,
-          label = vim.fn.strdisplaywidth(fence_label) + 1 }
         vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
-          virt_text = graphical and { { string.rep(" ", width), "IpyNotebookCodeBlock" } } or border("╰", "╯", "", width),
+          virt_text = border("╰", "╯", "", width),
           virt_text_pos = "overlay",
           line_hl_group = "IpyNotebookCodeBlock",
           priority = 300,
@@ -286,7 +280,7 @@ local function render(bufnr)
     elseif in_code_block then
       vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
         line_hl_group = "IpyNotebookCodeBlock",
-        virt_text = { { graphical and "  " or "│ ", "IpyNotebookCodeBorder" } },
+        virt_text = { { "│ ", "IpyNotebookCodeBorder" } },
         virt_text_pos = "inline",
         virt_text_repeat_linebreak = true,
         hl_mode = "combine",
@@ -294,14 +288,13 @@ local function render(bufnr)
       })
       vim.api.nvim_buf_set_extmark(bufnr, namespace, row, #line, {
         -- Keep long source lines visible rather than overlaying a right-hand rail.
-        virt_text = { { graphical and "  " or " │", "IpyNotebookCodeBorder" } },
+        virt_text = { { " │", "IpyNotebookCodeBorder" } },
         virt_text_pos = "eol_right_align",
         hl_mode = "combine",
         priority = 300,
       })
     end
   end
-  panels.code(bufnr, ranges)
   vim.b[bufnr].ipynb_markdown_render_tick = changedtick
   vim.b[bufnr].ipynb_markdown_width = width
 end
@@ -344,7 +337,6 @@ function M.disable(bufnr)
   end
 
   clear(bufnr)
-  require("ipynb.panels").code(bufnr, {})
   metadata_fold(bufnr, false)
   require("ipynb.cell_header").clear(bufnr)
   vim.b[bufnr].ipynb_markdown_enabled = false

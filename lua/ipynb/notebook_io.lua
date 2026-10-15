@@ -46,8 +46,6 @@ local function open_notebook(jupytext, path, bufnr)
   -- would otherwise collapse onto EOF and be reused for the reloaded cells.
   local ui = package.loaded["ipynb.native_ui"]
   if ui then ui.clear(bufnr) end
-  local panels = package.loaded["ipynb.panels"]
-  if panels then panels.code(bufnr, {}) end
   local result = vim.fn.IpynbNotebookRead(path, option(jupytext, "new_template"))
   local text = result.text or ""
   local lines = vim.split(text, "\n", { plain = true })

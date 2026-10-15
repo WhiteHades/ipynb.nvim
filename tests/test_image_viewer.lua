@@ -62,16 +62,13 @@ assert(vim.api.nvim_get_current_win() == source_window)
 assert(not vim.api.nvim_win_is_valid(image_window))
 assert(calls.refresh >= 2)
 
-local panels = require("ipynb.panels")
-panels.available = function() return true end
-panels.output = function() end
 vim.o.columns, vim.o.lines = 12, 4
 assert(viewer.open("/tiny.png"))
 image_window = vim.api.nvim_get_current_win()
 image_config = vim.api.nvim_win_get_config(image_window)
 local placement = calls.from_file[#calls.from_file].opts
 assert(placement.x + 1 <= image_config.width and placement.y + 1 <= image_config.height,
-  "the image must fit inside a one-row graphical popup")
+  "the image must fit inside a one-row popup")
 viewer.close()
 assert(not vim.api.nvim_win_is_valid(image_window) and vim.api.nvim_get_current_win() == source_window)
 

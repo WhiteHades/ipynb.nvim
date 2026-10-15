@@ -299,9 +299,7 @@ return function(state)
     local body = {}
     local remaining = number(state.options.limit_output_chars, 1000000)
     local image_index = 0
-    local graphical = require("ipynb.panels").available()
-    local inset = graphical and shape.width >= 8 and (virtual and 3 or 2)
-      or (virtual and shape.width >= 4 and 1 or 0)
+    local inset = virtual and shape.width >= 4 and 1 or 0
     local content_width = math.max(1, shape.width - inset * 2)
 
     for _, segment in ipairs(segments(cell)) do
@@ -309,7 +307,6 @@ return function(state)
         local location = state.options.image_location
         local allowed = location == "both" or (virtual and location == "virt") or (not virtual and location == "float")
         if allowed and type(segment.path) == "string" and segment.path ~= "" then
-          if graphical then body[#body + 1] = " " end
           image_index = image_index + 1
           local id = ("ipynb-native-%d-%s-%d-%d-%s"):format(
             cell.buf, safe_id(cell.id), cell.revision, image_index, kind
@@ -325,7 +322,7 @@ return function(state)
             virtual_layout = virtual and shape or nil,
             with_virtual_padding = false,
             max_width = content_width,
-            max_height = math.max(0, shape.height - (graphical and 4 or 2)),
+            max_height = math.max(0, shape.height - 2),
           })
           local size_ok, size = false, nil
           if ok and identifier then size_ok, size = pcall(api.image_size, identifier) end
@@ -337,7 +334,6 @@ return function(state)
           elseif identifier and height > 0 then
             records[#records + 1] = { api = api, id = identifier }
             for _ = 1, height do body[#body + 1] = " " end
-            if graphical then body[#body + 1] = " " end
           else
             if identifier then pcall(api.clear, identifier) end
             body[#body + 1] = segment.fallback or "[Image unavailable: no usable image renderer]"
@@ -359,22 +355,20 @@ return function(state)
     end
 
     local heading = header(cell)
-    cell.ui.panel_label = vim.fn.strdisplaywidth(heading) + 2
-    local title = (virtual and (graphical and "   " or "╭─ ") or " ") .. heading .. " "
+    local title = (virtual and "╭─ " or " ") .. heading .. " "
     local title_width = math.max(0, shape.width - (virtual and 1 or 0))
     if vim.fn.strdisplaywidth(title) > title_width then title = take_display_width(title, title_width) end
     local lines = {
-      title .. (virtual and (string.rep(graphical and " " or "─", math.max(0, title_width - vim.fn.strdisplaywidth(title)))
-        .. (shape.width > 0 and (graphical and " " or "╮") or "")) or ""),
+      title .. (virtual and (string.rep("─", math.max(0, title_width - vim.fn.strdisplaywidth(title)))
+        .. (shape.width > 0 and "╮" or "")) or ""),
     }
     for _, line in ipairs(body) do
-      local rail = inset > 0 and (graphical and string.rep(" ", inset) or "│") or ""
+      local rail = inset > 0 and "│" or ""
       lines[#lines + 1] = rail .. pad(line, content_width) .. rail
     end
     if virtual then
-      lines[#lines + 1] = graphical and string.rep(" ", shape.width)
-        or ((shape.width > 1 and "╰" or "") .. string.rep("─", math.max(0, shape.width - 2))
-          .. (shape.width > 0 and "╯" or ""))
+      lines[#lines + 1] = (shape.width > 1 and "╰" or "") .. string.rep("─", math.max(0, shape.width - 2))
+        .. (shape.width > 0 and "╯" or "")
     end
     shape.virtual_height = #lines
     return lines, records

@@ -127,17 +127,8 @@ api.from_file = function(path, opts)
       if not self.global_state.enabled or self.global_state.disable_decorator_handling then return end
       if vim.api.nvim_win_get_buf(self.window) ~= self.buffer then self:clear(); return end
       if vim.api.nvim_win_get_tabpage(self.window) ~= vim.api.nvim_get_current_tabpage() then self:clear(); return end
-      if not self.ipynb_frame and self.ipynb_row >= vim.api.nvim_buf_line_count(self.buffer) then self:clear(); return end
+      if self.ipynb_row >= vim.api.nvim_buf_line_count(self.buffer) then self:clear(); return end
       local config = vim.api.nvim_win_get_config(self.window)
-      if self.ipynb_frame then
-        local frame = self.ipynb_frame
-        if covered_by_float(self.window, frame.bounds) then self:clear(); return end
-        if self.is_rendered and self.rendered_geometry == frame then return end
-        self.bounds = frame.bounds
-        self.global_state.backend.render(self, frame.x, frame.y, frame.width, frame.height)
-        self.rendered_geometry = frame
-        return
-      end
       if api.panel_supported() and self.geometry.width and self.geometry.width > 0 then
         local size = term.get_size()
         local width = math.floor(self.geometry.width * size.cell_width + 0.5)
@@ -181,9 +172,7 @@ api.from_file = function(path, opts)
   img.geometry.x, img.geometry.y = opts.x or 0, opts.y or 0
   img.ipynb_path = path
   img.ipynb_viewer = opts.viewer
-  img.ipynb_frame = opts.frame
   img.ipynb_virtual_layout = opts.virtual_layout
-  if opts.frame then img.geometry.width, img.geometry.height = opts.frame.width, opts.frame.height end
   img.ipynb_row = opts.y or 0
   img.render_offset_top = opts.render_offset_top or 0
   img.with_virtual_padding = false
@@ -191,13 +180,13 @@ api.from_file = function(path, opts)
   -- Apply provider limits once during measurement, not again against the
   -- smaller output float during rendering.
   img.ignore_global_max_size = true
-  if opts.buffer and not opts.viewer and not opts.frame and not vim.b[opts.buffer].ipynb_image_mouse then
+  if opts.buffer and not opts.viewer and not vim.b[opts.buffer].ipynb_image_mouse then
     vim.b[opts.buffer].ipynb_image_mouse = true
     local function click()
       local mouse = vim.fn.getmousepos()
       for _, candidate in pairs(images) do
         local rect = candidate.rendered_geometry
-        if not candidate.ipynb_frame and candidate.ipynb_active and candidate.is_rendered and rect
+        if candidate.ipynb_active and candidate.is_rendered and rect
           and candidate.window == mouse.winid
           and mouse.screencol - 1 >= rect.x and mouse.screencol - 1 < rect.x + rect.width
           and mouse.screenrow - 1 >= rect.y and mouse.screenrow - 1 < rect.y + rect.height then
@@ -298,7 +287,6 @@ local function render(id)
   if not img then return end
   if not img.window or not vim.api.nvim_win_is_valid(img.window)
     or vim.api.nvim_win_get_buf(img.window) ~= img.buffer then
-    if img.ipynb_frame then img:clear(); return end
     img.window = vim.fn.bufwinid(img.buffer)
   end
   if img.window ~= -1 and vim.api.nvim_win_is_valid(img.window) then
@@ -364,8 +352,6 @@ vim.api.nvim_create_autocmd({ "WinScrolled", "WinNew", "WinClosed", "WinResized"
 })
 
 api.clear_all = function()
-  local panels = package.loaded["ipynb.panels"]
-  if panels then panels.clear_all() end
   for id in pairs(images) do api.clear(id) end
   images = {}
 end

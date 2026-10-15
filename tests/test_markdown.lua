@@ -1,5 +1,8 @@
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h")
 vim.opt.rtp:prepend(root)
+package.preload["ipynb.molten_load_image_nvim"] = function()
+  return { image_api = { panel_supported = function() return true end } }
+end
 
 local markdown = require("ipynb.markdown")
 local namespace = vim.api.nvim_get_namespaces()["ipynb-markdown"]
@@ -18,6 +21,12 @@ markdown.enable(buffer)
 local first_tick = vim.api.nvim_buf_get_changedtick(buffer)
 local first_marks = vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, { details = true })
 assert(#first_marks > 0)
+local opening_border
+for _, mark in ipairs(first_marks) do
+  if mark[2] == 2 then opening_border = mark[4].virt_text end
+end
+assert(opening_border and opening_border[1][1]:find("╭", 1, true),
+  "cell borders must move with native text even when terminal graphics are available")
 assert(vim.b[buffer].ipynb_markdown_render_tick == first_tick)
 
 markdown.enable(buffer)

@@ -30,10 +30,8 @@ function M.generate(key, args, callback)
     if closing then return end
     if result.code ~= 0 then
       M.failed = true
-      local panels = package.loaded["ipynb.panels"]
-      if panels then panels.fallback() end
       for _, done in ipairs(callbacks) do done(nil) end
-      vim.notify("ipynb.nvim: ImageMagick could not style notebook images; using plain borders and original plots.", vim.log.levels.WARN)
+      vim.notify("ipynb.nvim: ImageMagick could not style notebook images; using original plots.", vim.log.levels.WARN)
       return
     end
     ready[key] = path
