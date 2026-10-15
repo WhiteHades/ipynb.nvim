@@ -226,7 +226,6 @@ mod tests {
     #[test]
     fn timeout_kills_group_cleans_scratch_and_restarts() {
         use std::fs;
-        use std::os::unix::fs::PermissionsExt;
         use std::time::Instant;
 
         let directory = tempfile::tempdir().unwrap();
@@ -242,8 +241,7 @@ mod tests {
              wait\n",
         )
         .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-        let mut converter = Converter::new(script.to_str().unwrap(), Path::new("unused"));
+        let mut converter = Converter::new("/bin/sh", &script);
         converter.warmup().unwrap();
         let warmed_pid = converter.process.as_ref().unwrap().child.id();
         converter.warmup().unwrap();
