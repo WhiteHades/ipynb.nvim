@@ -33,9 +33,10 @@ package.loaded['ipynb.image_tmux'] = {
   unwatch=function() tmux_unwatched=tmux_unwatched+1 end,
 }
 package.loaded['ipynb.image_kitty'] = {track=function() end}
+local style_releases = 0
 package.loaded['ipynb.image_style'] = {
   metrics=function() return 16, 2, 12 end,
-  rounded=function(path, _, _, _, _, _, done) done(path) end,
+  rounded=function(path, _, _, _, _, _, done) done(path, function() style_releases = style_releases + 1 end) end,
 }
 local placements, clears, plot = 0, 0
 local state = {enabled=true, options={}, backend={render=function(img)
@@ -57,10 +58,12 @@ plot_api.image_size(id)
 plot_api.render(id)
 assert(vim.wait(1000, function() return placements > 0 end, 5), 'visible plot must render')
 local visible_placements, visible_clears = placements, clears
+assert(style_releases == 0, 'accepted styled images must retain their cache lease while visible')
 tmux_offset = nil
 tmux_notify()
 assert(vim.wait(1000, function() return clears > visible_clears end, 5), 'tmux notification must clear hidden plots without focus events')
 assert(placements == visible_placements and not plot.is_rendered and plot.ipynb_active)
+assert(style_releases == 0, 'visibility clears must retain the styled image lease')
 tmux_offset = 1
 tmux_notify()
 assert(vim.wait(1000, function() return placements > visible_placements end, 5), 'tmux notification must restore visible plots')
@@ -71,6 +74,7 @@ plot_api.refresh()
 assert(vim.wait(1000, function() return clears > clear_before end, 5), 'hidden plot must clear')
 assert(placements == before and not plot.is_rendered and plot.ipynb_active,
   'hidden-tab plot must not render or lose its active state')
+assert(style_releases == 0, 'tab visibility changes must retain the styled image lease')
 vim.cmd('tabprevious')
 vim.cmd('redraw')
 assert(vim.wait(1000, function() return placements > before end, 5), 'TabEnter must restore the active plot')
@@ -144,6 +148,9 @@ local refresh_screenpos_calls = screenpos_calls
 local refresh_clear_calls, refresh_render_calls = clears - clear_before, placements - render_before
 assert(offscreen_rows_measured == 0, 'offscreen plots must be culled before screen position measurement')
 vim.fn.screenpos = screenpos
+local release_before_clear = style_releases
+plot_api.clear('tab-plot')
+assert(style_releases == release_before_clear + 1, 'lifecycle clear must release the accepted style lease')
 plot_api.clear_all()
 assert(vim.wait(1000, function() return tmux_unwatched == 1 end, 5), 'last-image cleanup must release the tmux watcher once')
 

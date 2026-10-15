@@ -1,8 +1,9 @@
 -- Derived display assets only. Notebook images are never modified.
 local M = {}
 local directory
-local pending, ready = {}, {}
+local pending, ready, idle, jobs = {}, {}, {}, {}
 local closing = false
+local IDLE_FILES, IDLE_BYTES = 16, 8 * 1024 * 1024
 
 function M.metrics(size)
   local outer = size.cell_width * 0.5
@@ -11,11 +12,59 @@ function M.metrics(size)
   return outer, stroke, math.max(outer - size.cell_width - stroke, stroke)
 end
 
+local function release(entry)
+  local live = true
+  return function()
+    if not live then return end
+    live = false
+    entry.refs = entry.refs - 1
+    if entry.refs == 0 then
+      idle[#idle + 1] = entry
+      local bytes = 0
+      for _, item in ipairs(idle) do bytes = bytes + item.bytes end
+      while #idle > IDLE_FILES or bytes > IDLE_BYTES do
+        local old = table.remove(idle, 1)
+        ready[old.key] = nil
+        vim.fn.delete(old.path)
+        bytes = bytes - old.bytes
+      end
+    end
+  end
+end
+
+local function acquire(entry)
+  for index, item in ipairs(idle) do
+    if item == entry then table.remove(idle, index); break end
+  end
+  entry.refs = entry.refs + 1
+  return release(entry)
+end
+
+local function deliver(callback, path, done)
+  local ok, err = pcall(callback, path, done)
+  if not ok then
+    if done then done() end
+    vim.notify("ipynb.nvim: image style callback failed: " .. tostring(err), vim.log.levels.ERROR)
+  end
+end
+
+local function failed(key, request, path)
+  if pending[key] ~= request then return end
+  pending[key] = nil
+  if path then vim.fn.delete(path) end
+  M.failed = true
+  for _, done in ipairs(request.callbacks) do deliver(done, nil) end
+  vim.notify("ipynb.nvim: ImageMagick could not style notebook images; using original plots.", vim.log.levels.WARN)
+end
+
 function M.generate(key, args, callback)
   if closing then return end
   key = vim.fn.sha256(key)
-  if ready[key] then callback(ready[key]); return end
-  if pending[key] then pending[key][#pending[key] + 1] = callback; return end
+  if ready[key] then
+    deliver(callback, ready[key].path, acquire(ready[key]))
+    return
+  end
+  if pending[key] then pending[key].callbacks[#pending[key].callbacks + 1] = callback; return end
   if not directory then
     directory = vim.fn.tempname() .. "-ipynb-style"
     vim.fn.mkdir(directory, "p", 448)
@@ -24,20 +73,32 @@ function M.generate(key, args, callback)
   local command = { "magick", "-limit", "memory", "64MiB", "-limit", "map", "128MiB" }
   vim.list_extend(command, args)
   command[#command + 1] = path
-  pending[key] = { callback }
-  vim.system(command, { text = true }, vim.schedule_wrap(function(result)
-    local callbacks = pending[key] or {}
-    pending[key] = nil
-    if closing then return end
+  local request = { callbacks = { callback } }
+  pending[key] = request
+  local ok, job = pcall(vim.system, command, { text = true }, vim.schedule_wrap(function(result)
+    jobs[request.job] = nil
+    if pending[key] ~= request then return end
+    if closing then pending[key] = nil; return end
     if result.code ~= 0 then
-      M.failed = true
-      for _, done in ipairs(callbacks) do done(nil) end
-      vim.notify("ipynb.nvim: ImageMagick could not style notebook images; using original plots.", vim.log.levels.WARN)
+      failed(key, request, path)
       return
     end
-    ready[key] = path
-    for _, done in ipairs(callbacks) do done(path) end
+    local stat = vim.uv.fs_stat(path)
+    if not stat then
+      failed(key, request, path)
+      return
+    end
+    pending[key] = nil
+    local entry = { key = key, path = path, bytes = stat.size, refs = #request.callbacks }
+    ready[key] = entry
+    for _, done in ipairs(request.callbacks) do deliver(done, path, release(entry)) end
   end))
+  if not ok or not job then
+    failed(key, request, path)
+    return
+  end
+  request.job = job
+  jobs[job] = true
 end
 
 function M.rounded(path, width, height, radius, source_width, source_height, callback)
@@ -59,7 +120,15 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
   group = vim.api.nvim_create_augroup("ipynb_image_style", { clear = true }),
   callback = function()
     closing = true
-    if directory then vim.fn.delete(directory, "rf") end
+    local running = {}
+    for job in pairs(jobs) do running[#running + 1] = job end
+    for _, job in ipairs(running) do pcall(job.kill, job, "sigkill") end
+    local confirmed = true
+    for _, job in ipairs(running) do
+      local ok, result = pcall(job.wait, job, 1000)
+      if not ok or not result then confirmed = false end
+    end
+    if confirmed and directory then vim.fn.delete(directory, "rf") end
   end,
 })
 

@@ -357,11 +357,32 @@ local previous_snacks, previous_global_snacks = package.loaded.snacks, Snacks
 local previous_image_style = package.loaded["ipynb.image_style"]
 local snack_placements = {}
 local snack_roundings = {}
+local snack_style_releases = 0
+local delayed_snack_callbacks = {}
+local snack_upstream_images = {}
 Snacks = {
   image = {
     placement = { new = function(buffer, path, opts)
-      local placement = { buffer = buffer, path = path, opts = opts, closed = 0 }
-      function placement:close() self.closed = self.closed + 1 end
+      local image = snack_upstream_images[path]
+      if not image then
+        image = { placements = {}, sends = 0, completions = 0, errors = 0 }
+        function image:on_ready() self.sends = self.sends + 1 end
+        local convert = { finished = not path:match("^/pending"), opts = {} }
+        function convert:done() return self.finished end
+        convert.opts.on_done = function()
+          image.completions = image.completions + 1
+          if convert.failed then image.errors = image.errors + 1
+          else vim.schedule(function() image:on_ready() end) end
+        end
+        image._convert = convert
+        snack_upstream_images[path] = image
+      end
+      local placement = { buffer = buffer, path = path, opts = opts, closed = 0, img = image }
+      image.placements[placement] = placement
+      function placement:close()
+        self.closed = self.closed + 1
+        self.img.placements[self] = nil
+      end
       snack_placements[#snack_placements + 1] = placement
       return placement
     end },
@@ -376,7 +397,13 @@ package.loaded["ipynb.image_style"] = {
   metrics = function(size) return size.cell_width / 2, 1, 1 end,
   rounded = function(path, width, height, radius, source_width, source_height, callback)
     snack_roundings[#snack_roundings + 1] = { path, width, height, radius, source_width, source_height }
-    if path == "/fallback.png" then callback(nil) else callback(path .. ".rounded") end
+    if path:match("^/delayed") then
+      delayed_snack_callbacks[#delayed_snack_callbacks + 1] = function()
+        callback(path .. ".rounded", function() snack_style_releases = snack_style_releases + 1 end)
+      end
+    elseif path == "/fallback.png" then callback(nil) else
+      callback(path .. ".rounded", function() snack_style_releases = snack_style_releases + 1 end)
+    end
   end,
 }
 package.loaded.snacks = nil
@@ -416,11 +443,54 @@ assert(vim.deep_equal(snack_placements[1].opts.pos, { 2, 0 })
 snacks_adapter.clear(first_id)
 assert(snack_placements[1].closed == 1 and snack_placements[2].closed == 0,
   "clearing one image ID must preserve the other placement for the same path")
+assert(snack_style_releases == 1, "clearing a Snacks placement must release its style lease")
 snacks_adapter.render(first_id)
 assert(#snack_placements == 2 and snacks_adapter.image_size(first_id).width == 0,
   "rendering a cleared image ID must be a no-op")
 snacks_adapter.clear_all()
 assert(snack_placements[2].closed == 1, "clear_all must remove all remaining placements")
+assert(snack_style_releases == 2, "clear_all must release every accepted style lease")
+local delayed_id = snacks_adapter.from_file("/delayed-old.png", { id = "delayed", buffer = buf })
+snacks_adapter.from_file("/delayed-current.png", { id = delayed_id, buffer = buf })
+delayed_snack_callbacks[1]()
+assert(snack_style_releases == 3 and #snack_placements == 2,
+  "a replaced stale callback must release its lease without creating a placement")
+snacks_adapter.render(delayed_id)
+delayed_snack_callbacks[2]()
+assert(#snack_placements == 3 and snack_placements[3].path == "/delayed-current.png.rounded",
+  "the replacement callback must create the current image placement")
+snacks_adapter.clear(delayed_id)
+assert(snack_placements[3].closed == 1 and snack_style_releases == 4,
+  "clearing the replacement must close it and release its accepted lease")
+local pending_a = snacks_adapter.from_file("/pending-shared.png", { id = "pending-a", buffer = buf })
+local pending_b = snacks_adapter.from_file("/pending-shared.png", { id = "pending-b", buffer = other })
+snacks_adapter.render(pending_a)
+snacks_adapter.render(pending_b)
+local pending_image = snack_upstream_images["/pending-shared.png.rounded"]
+snacks_adapter.clear(pending_a)
+snacks_adapter.clear(pending_b)
+assert(snack_style_releases == 4, "pending conversions must retain closed owners' leases until completion")
+pending_image._convert.finished = true
+pending_image._convert.failed = true
+pending_image._convert.opts.on_done(pending_image._convert)
+assert(vim.wait(1000, function() return snack_style_releases == 6 end),
+  "failed shared conversion completion must release every closed owner's lease")
+assert(pending_image.completions == 1 and pending_image.errors == 1 and pending_image.sends == 0,
+  "failed conversion cleanup must preserve its callback without sending a file with no placements")
+local live_a = snacks_adapter.from_file("/pending-live.png", { id = "live-a", buffer = buf })
+local live_b = snacks_adapter.from_file("/pending-live.png", { id = "live-b", buffer = other })
+snacks_adapter.render(live_a)
+snacks_adapter.render(live_b)
+local live_image = snack_upstream_images["/pending-live.png.rounded"]
+snacks_adapter.clear(live_a)
+live_image._convert.finished = true
+live_image._convert.opts.on_done(live_image._convert)
+assert(vim.wait(1000, function() return snack_style_releases == 7 end),
+  "conversion completion must release the closed owner while another placement stays live")
+assert(live_image.completions == 1 and live_image.sends == 1,
+  "a shared live placement must still receive its converted image")
+snacks_adapter.clear(live_b)
+assert(snack_style_releases == 8, "a closed owner must release immediately after conversion completes")
 snack_placements = {}
 local fallback_id = snacks_adapter.from_file("/fallback.png", { id = "fallback", buffer = buf })
 snacks_adapter.render(fallback_id)

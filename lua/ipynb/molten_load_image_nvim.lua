@@ -151,9 +151,10 @@ api.from_file = function(path, opts)
             self.ipynb_preparing = key
             self:clear()
             require("ipynb.image_style").rounded(self.ipynb_path, width, height, radius,
-              self.ipynb_source_width, self.ipynb_source_height, function(path)
-              if images[id] ~= self or self.ipynb_preparing ~= key then return end
+              self.ipynb_source_width, self.ipynb_source_height, function(path, release)
+              if images[id] ~= self or self.ipynb_preparing ~= key then if release then release() end; return end
               if not path then self:render(); return end
+              local previous_release = self.ipynb_style_release
               self.path, self.resized_path, self.cropped_path = path, path, path
               -- Do not let image.nvim clone this padded canvas as the raw plot.
               self.original_path = path
@@ -162,6 +163,8 @@ api.from_file = function(path, opts)
               self.resize_hash, self.crop_hash, self.transform_key = nil, nil, nil
               self.transform_signature, self.pending_transform_key = nil, nil
               self.ipynb_prepared = key
+              self.ipynb_style_release = release
+              if previous_release then previous_release() end
               self:render()
             end)
           end
@@ -311,6 +314,10 @@ api.clear = function(id)
   if images[id] then
     images[id].ipynb_active = false
     images[id]:clear()
+    if images[id].ipynb_style_release then
+      images[id].ipynb_style_release()
+      images[id].ipynb_style_release = nil
+    end
     images[id] = nil
     if not unwatch_pending then
       unwatch_pending = true

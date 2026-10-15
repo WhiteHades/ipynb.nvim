@@ -525,12 +525,72 @@ local doubled, doubled_stroke, doubled_inner = style.metrics({cell_width=20, cel
 assert(radius == 5 and stroke == 1 and inner == 1 and inner < radius)
 assert(doubled == radius * 2 and doubled_stroke == stroke * 2 and doubled_inner == inner * 2,
   'corner radii must scale with terminal cell width')
-local done = false
-style.rounded(vim.env.IPYNB_TEST_SOURCE, 640, 506, inner, 500, 400, function(path)
-  assert(vim.uv.fs_copyfile(path, vim.env.IPYNB_TEST_RESULT))
-  done = true
+local done, paths, releases = 0, {}, {}
+local function accept(path, release)
+  paths[#paths + 1], releases[#releases + 1] = path, release
+  done = done + 1
+end
+style.rounded(vim.env.IPYNB_TEST_SOURCE, 640, 506, inner, 500, 400, accept)
+style.rounded(vim.env.IPYNB_TEST_SOURCE, 640, 506, inner, 500, 400, accept)
+assert(vim.wait(10000, function() return done == 2 end), 'shared rounded image conversion did not finish')
+assert(paths[1] == paths[2], 'pending identical styles must share one generated image')
+assert(releases[1] and releases[2], 'each shared style request must receive its own lease')
+assert(vim.uv.fs_copyfile(paths[1], vim.env.IPYNB_TEST_RESULT))
+releases[1]()
+assert(vim.uv.fs_stat(paths[1]), 'one live lease must protect a shared cache file')
+releases[2]()
+local cached_path, cached_release
+style.rounded(vim.env.IPYNB_TEST_SOURCE, 640, 506, inner, 500, 400, function(path, release)
+  cached_path, cached_release = path, release
 end)
-assert(vim.wait(10000, function() return done end), 'rounded image conversion did not finish')
+assert(cached_path == paths[1] and cached_release, 'recent idle style hits must reacquire the cached file')
+cached_release()
+for index = 1, 16 do
+  local path
+  style.generate('eviction-' .. index, {'-size', '1x1', 'xc:white'}, function(output, release)
+    path = output
+    release()
+  end)
+  assert(vim.wait(10000, function() return path ~= nil end), 'idle cache fill did not finish')
+end
+assert(not vim.uv.fs_stat(paths[1]), 'oldest idle style must be evicted above the file limit')
+local partial_path = vim.fn.fnamemodify(paths[1], ':h') .. '/' .. vim.fn.sha256('partial-failure') .. '.png'
+vim.fn.writefile({''}, partial_path)
+local failed_path = 'pending'
+style.generate('partial-failure', {'-definitely-invalid'}, function(path) failed_path = path end)
+assert(vim.wait(10000, function() return failed_path ~= 'pending' end), 'failed conversion did not finish')
+assert(failed_path == nil and not vim.uv.fs_stat(partial_path), 'failed conversions must discard partial output')
+local system, spawn_result = vim.system, 'pending'
+vim.system = function() error('simulated spawn failure') end
+style.generate('spawn-recovery', {}, function(path) spawn_result = path end)
+vim.system = system
+assert(spawn_result == nil, 'spawn failures must complete callbacks with no styled image')
+local recovered
+style.generate('spawn-recovery', {'-size', '1x1', 'xc:white'}, function(path, release)
+  recovered = path
+  release()
+end)
+assert(vim.wait(10000, function() return recovered ~= nil end), 'a spawn failure must clear pending state for retry')
+local shutdown_signal, shutdown_timeout
+vim.system = function(_, _, callback)
+  return {
+    kill=function(_, signal) shutdown_signal = signal end,
+    wait=function(_, timeout)
+      shutdown_timeout = timeout
+      callback({code=137, signal=9})
+      return {code=137, signal=9}
+    end,
+  }
+end
+style.generate('shutdown-probe', {}, function() error('shutdown must not publish pending styles') end)
+vim.system = system
+vim.api.nvim_create_autocmd('VimLeavePre', { callback=function()
+  assert(not vim.uv.fs_stat(vim.fn.fnamemodify(paths[1], ':h')), 'style cache directory must be removed before shutdown completes')
+end })
+vim.api.nvim_exec_autocmds('VimLeavePre', {modeline=false})
+assert(shutdown_signal == 'sigkill' and shutdown_timeout == 1000,
+  'shutdown must kill pending converters and use a bounded reap wait')
+assert(not vim.uv.fs_stat(vim.fn.fnamemodify(paths[1], ':h')), 'confirmed shutdown must remove the cache directory')
 "#,
     )
     .unwrap();
