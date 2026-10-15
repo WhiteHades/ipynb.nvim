@@ -591,8 +591,19 @@ fn opening_optional_pairs_does_not_run_external_converters() -> Result<()> {
     )?;
     let read = engine.read(&json!({"path":path}))?;
     assert_eq!(read["paired_changed"], json!([paired]));
+    assert!(
+        read["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("---\n"))
+    );
     assert!(!marker.exists());
-    engine.jupytext(&json!({"action":"info","path":path,"buf":1,"text":read["text"]}))?;
+    let info =
+        engine.jupytext(&json!({"action":"info","path":path,"buf":1,"text":read["text"]}))?;
+    assert!(info["formats"].as_array().is_some_and(|formats| {
+        formats
+            .iter()
+            .any(|format| format["format"] == "md:markdown")
+    }));
     assert!(
         marker.exists(),
         "explicit format discovery must retain access to optional tools"

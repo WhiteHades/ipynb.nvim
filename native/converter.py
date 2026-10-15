@@ -19,14 +19,24 @@ from typing import Any
 # reads must not execute optional tools from PATH.
 with TemporaryDirectory(dir=os.environ.get("IPYNB_CONVERTER_TMPDIR")) as import_path:
     original_path = os.environ.get("PATH")
+    optional_managers = ("jupytext.sync_contentsmanager", "jupytext.async_contentsmanager")
+    missing = object()
+    previous_modules = {name: sys.modules.get(name, missing) for name in optional_managers}
     try:
         os.environ["PATH"] = import_path
+        for name in optional_managers:
+            sys.modules[name] = None
         import jupytext_adapter
     finally:
         if original_path is None:
             os.environ.pop("PATH", None)
         else:
             os.environ["PATH"] = original_path
+        for name, module in previous_modules.items():
+            if module is missing:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
 
 def _text(value: Any) -> str:
