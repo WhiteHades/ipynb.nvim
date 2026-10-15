@@ -374,14 +374,38 @@ local ok, err = xpcall(function()
   vim.cmd('write')
   assert(format_calls == 4, 'each save must use configured Python save hooks for both code cells')
   if vim.fn.exists('#general_autosave#FocusLost') == 1 then
-    vim.bo[saved_buf].modified = true
+    local native = require('ipynb.native')
+    local request, nested_ok, nested_error = native.request
+    local queued, writes = false, 0
+    native.request = function(method, params)
+      if method == 'write' then writes = writes + 1 end
+      if method == 'write' and not queued then
+        queued = true
+        vim.defer_fn(function()
+          vim.api.nvim_buf_set_lines(saved_buf, span.begin[1] + 1, span.begin[1] + 1, false, {'# typed during save'})
+          nested_ok, nested_error = pcall(vim.api.nvim_exec_autocmds, 'FocusLost', {modeline=false})
+        end, 0)
+      end
+      return request(method, params)
+    end
+    vim.api.nvim_buf_set_lines(saved_buf, span.begin[1] + 1, span.begin[1] + 1, false, {'# autosaved edit'})
     vim.api.nvim_exec_autocmds('FocusLost', {modeline=false})
+    assert(vim.wait(2000, function() return not vim.bo[saved_buf].modified end, 5), 'queued edit was not saved')
+    native.request = request
+    assert(writes == 2, 'overlapping save must coalesce into one followup for the new edit')
+    assert(not vim.fn.execute('messages'):find('notebook changed on disk since it was opened', 1, true))
+    assert(queued and nested_ok, 'overlapping FocusLost save failed: ' .. tostring(nested_error))
     assert(not vim.bo[saved_buf].modified, 'FocusLost autosave must complete through configured save hooks')
+    assert(vim.deep_equal(vim.b[saved_buf].mtime, vim.uv.fs_stat(relative).mtime), 'autosave left a stale disk version')
   end
   assert(type(vim.b[saved_buf].mtime) == 'table' and not vim.bo[saved_buf].modified,
     'repeated relative-path saves must retain the disk modification guard')
   local saved = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
   assert(table.concat(saved.cells[2].source):find('print(44)', 1, true), 'saved notebook lost pasted source')
+  if vim.fn.exists('#general_autosave#FocusLost') == 1 then
+    assert(table.concat(saved.cells[2].source):find('# typed during save', 1, true), 'save lost an in-flight edit')
+    assert(table.concat(saved.cells[2].source):find('# autosaved edit', 1, true), 'autosave lost its original edit')
+  end
   vim.opt.rtp:append(vim.env.IPYNB_TEST_PLUGINS .. '/nvim-lint')
   local lint = require('lint')
   local configured = lint.linters_by_ft.python
@@ -445,10 +469,19 @@ local ok, err = xpcall(function()
   assert(not pcall(vim.cmd, 'write'), 'formatter failure must abort the notebook write')
   assert(table.concat(vim.fn.readfile(relative), '\n') == unchanged, 'failed formatting changed the notebook file')
   vim.api.nvim_del_augroup_by_id(format_group)
+  vim.cmd('write') -- A failed formatter must release the save guard.
+  assert(vim.deep_equal(vim.b[saved_buf].mtime, vim.uv.fs_stat(relative).mtime))
   local outside = vim.fn.readfile(relative)
   outside[#outside + 1] = ' '
   vim.fn.writefile(outside, relative)
+  local external = table.concat(vim.fn.readfile(relative), '\n')
+  vim.api.nvim_buf_set_lines(saved_buf, span.begin[1] + 1, span.begin[1] + 1, false, {'# unsaved local edit'})
   assert(not pcall(vim.cmd, 'write'), 'external changes must still block save')
+  assert(vim.bo[saved_buf].modified and table.concat(vim.fn.readfile(relative), '\n') == external,
+    'a real conflict must preserve disk and unsaved edits')
+  vim.cmd('edit!')
+  vim.cmd('write')
+  assert(vim.deep_equal(vim.b[saved_buf].mtime, vim.uv.fs_stat(relative).mtime), 'reload did not recover saving')
   local pixels, image_rows = 8, 8
   package.loaded['ipynb.molten_load_image_nvim'] = {image_api={
     from_file=function(_, opts) return opts.id end,

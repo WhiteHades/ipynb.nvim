@@ -1,6 +1,7 @@
 local M = {}
 
 local state
+local writing = {}
 
 local function local_notebook(path)
   return type(path) == "string" and path:sub(-6) == ".ipynb" and not path:find("://", 1, true)
@@ -76,14 +77,17 @@ local function write_notebook(jupytext, path, _metadata, bufnr)
   path = vim.fn.fnamemodify(path, ":p")
   local in_place = write_in_place(path, bufnr)
   local expected_mtime = in_place and vim.b[bufnr].mtime or vim.NIL
+  local name = vim.api.nvim_buf_get_name(bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local tick = vim.api.nvim_buf_get_changedtick(bufnr)
   local result = vim.api.nvim_buf_call(bufnr, function()
     return vim.fn.IpynbNotebookWrite(path, table.concat(lines, "\n"), expected_mtime)
   end)
-  if in_place or vim.o.cpoptions:find("%+") ~= nil then
+  if vim.api.nvim_buf_get_name(bufnr) == name and vim.api.nvim_buf_get_changedtick(bufnr) == tick
+    and (in_place or vim.o.cpoptions:find("%+") ~= nil) then
     vim.api.nvim_set_option_value("modified", false, { buf = bufnr })
   end
-  if in_place and result and result.mtime then
+  if in_place and write_in_place(path, bufnr) and result and result.mtime then
     vim.b[bufnr].mtime = result.mtime
   end
   return result
@@ -120,13 +124,31 @@ function M.attach(buf)
   vim.api.nvim_create_autocmd("BufWriteCmd", {
     buffer = buf, group = group, nested = true,
     callback = function(event)
-      vim.api.nvim_buf_call(buf, function()
+      if writing[buf] then
+        if not same_file(writing[buf].path, event.file) then error("Notebook save in progress; retry the other destination", 0) end
+        writing[buf].again = true
+        return
+      end
+      -- Engine waits process events; another save must not reuse the in-flight disk token.
+      local active = { path = event.file }
+      writing[buf] = active
+      local ok, err = pcall(vim.api.nvim_buf_call, buf, function()
         require("ipynb.native_ui").with_positions(buf, function()
           vim.api.nvim_exec_autocmds("BufWritePre", { buffer = buf, modeline = false })
         end)
         write_notebook(state.jupytext, event.file, nil, buf)
         vim.api.nvim_exec_autocmds("BufWritePost", { pattern = event.file, modeline = false })
       end)
+      writing[buf] = nil
+      if not ok then error(err, 0) end
+      if active.again and vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified then
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified
+            and same_file(vim.api.nvim_buf_get_name(buf), active.path) then
+            vim.api.nvim_buf_call(buf, function() vim.cmd("update") end)
+          end
+        end)
+      end
     end,
   })
   vim.bo[buf].buftype = ""
