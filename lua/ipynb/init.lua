@@ -1,4 +1,4 @@
-local M = { version = "0.1.2" }
+local M = { version = "0.1.3" }
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
 
 local notebook_pattern = "*.ipynb"
