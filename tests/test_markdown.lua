@@ -183,5 +183,38 @@ assert(vim.deep_equal(vim.api.nvim_buf_get_lines(metadata, 0, -1, false), metada
 markdown.disable(metadata)
 vim.wo.foldtext = original_foldtext
 vim.api.nvim_buf_delete(metadata, { force = true })
+if #vim.api.nvim_list_uis() > 0 then
+  local colors = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(colors)
+  vim.api.nvim_buf_set_lines(colors, 0, -1, false, { "```python", 'colors = "#000000 #ffffff #ee4c3c"', "```" })
+  vim.wo.foldenable = false
+  markdown.enable(colors)
+  local color_ns = vim.api.nvim_create_namespace("test-color-provider")
+  local samples = { { "#000000", 0xffffff, 0 }, { "#ffffff", 0, 0xffffff }, { "#ee4c3c", 0, 0xee4c3c } }
+  local checks = 0
+  for _, background in ipairs({ 0x181825, 0xf4ecd8, false }) do
+    vim.api.nvim_set_hl(0, "Normal", { fg = 0x808080, bg = background or nil })
+    vim.api.nvim_set_hl(0, "RenderMarkdownCode", { bg = background or nil })
+    require("ipynb.highlights").setup()
+    for _, priority in ipairs({ 200, 2000 }) do
+      for _, sample in ipairs(samples) do
+        vim.api.nvim_set_hl(0, "TestColorPreview", { fg = sample[2], bg = sample[3] })
+        local col = assert(vim.api.nvim_buf_get_lines(colors, 1, 2, false)[1]:find(sample[1], 1, true)) - 1
+        vim.api.nvim_buf_clear_namespace(colors, color_ns, 0, -1)
+        vim.api.nvim_buf_set_extmark(colors, color_ns, 1, col, {
+          end_col = col + #sample[1], hl_group = "TestColorPreview", priority = priority,
+        })
+        vim.cmd("redraw!")
+        local pos = vim.fn.screenpos(vim.api.nvim_get_current_win(), 2, col + 1)
+        local rendered = vim.api.nvim__inspect_cell(1, pos.row - 1, pos.col - 1)[2]
+        assert(rendered.foreground == sample[2] and rendered.background == sample[3],
+          "code fill must preserve the color provider's rendered foreground and background")
+        checks = checks + 1
+      end
+    end
+  end
+  if vim.env.IPYNB_TEST_COLOR_REPORT then vim.fn.writefile({ tostring(checks) }, vim.env.IPYNB_TEST_COLOR_REPORT) end
+  vim.api.nvim_buf_delete(colors, { force = true })
+end
 print("pass: markdown render caching, compact metadata, and re-enable behavior")
 vim.cmd("qa!")

@@ -312,12 +312,15 @@ local function render(bufnr, force_syntax)
       fence_row = nil
     elseif in_code_block and not (active_cell and row >= active_cell.first and row < active_cell.last) then
       vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
-        line_hl_group = "IpyNotebookCodeBlock",
+        end_row = row + 1,
+        end_col = 0,
+        hl_group = "IpyNotebookCodeBlock",
+        hl_eol = true,
         virt_text = { { "│ ", "IpyNotebookCodeBorder" } },
         virt_text_pos = "inline",
         virt_text_repeat_linebreak = true,
         hl_mode = "combine",
-        priority = 300,
+        priority = 0,
       })
       vim.api.nvim_buf_set_extmark(bufnr, namespace, row, #line, {
         -- Keep long source lines visible rather than overlaying a right-hand rail.
