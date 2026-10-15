@@ -3,6 +3,7 @@
 -- of relying on the resized bitmap's pixel dimensions for its display size.
 local M = {}
 local images = setmetatable({}, { __mode = "v" })
+local wire_ids = setmetatable({}, { __mode = "v" })
 local attached = false
 local warned = false
 local finishing = false
@@ -34,12 +35,28 @@ local function send(sequence, tmux)
   vim.api.nvim_ui_send(sequence)
 end
 
+local function wire_config(config, img)
+  if not img or not img.ipynb_wire_id then return config end
+  local result = vim.tbl_extend("force", {}, config, { image_id = img.ipynb_wire_id })
+  if result.placement_id ~= nil then result.placement_id = img.ipynb_wire_id end
+  return result
+end
+
 function M.track(img, term)
   if not img.internal_id or img.global_state.options.backend ~= "kitty" then return end
+  if not img.ipynb_wire_id and img.global_state.options.kitty_method ~= "unicode-placeholders" then
+    local id
+    repeat
+      local a, b, c, d = assert(vim.uv.random(4)):byte(1, 4)
+      id = (a % 128 + 128) * 16777216 + b * 65536 + c * 256 + d
+    until not wire_ids[id]
+    -- shortcut: IDs are random; use terminal-assigned IDs when replies are routed.
+    img.ipynb_wire_id, wire_ids[id] = id, img
+  end
   images[img.internal_id] = img
   if attached then return end
   local loaded, helpers = pcall(require, "image/backends/kitty/helpers")
-  if not loaded or type(helpers) ~= "table" or type(helpers.write_graphics_at) ~= "function" or type(helpers.write_graphics) ~= "function" or type(helpers.update_sync_end) ~= "function" then
+  if not loaded or type(helpers) ~= "table" or type(helpers.write) ~= "function" or type(helpers.write_graphics_at) ~= "function" or type(helpers.write_graphics) ~= "function" or type(helpers.update_sync_end) ~= "function" then
     if not warned then
       warned = true
       vim.notify("ipynb.nvim: image.nvim's Kitty API changed. Update both plugins; notebook image adjustments are disabled.", vim.log.levels.WARN)
@@ -68,6 +85,7 @@ function M.track(img, term)
       local offset = image_tmux.top_offset()
       if offset == nil then return end
       y = y + offset
+      if tmux.is_tmux and img.ipynb_wire_id then img.ipynb_tmux_clients = image_tmux.visible_clients() end
       -- Keep notebook graphics above opaque cell backgrounds in Ghostty.
       config = vim.tbl_extend("force", config, { display_zindex = 1 })
       if config.display_width and config.display_height then
@@ -80,6 +98,7 @@ function M.track(img, term)
         end
       end
     end
+    config = wire_config(config, img)
     local result
     if img and config.action == "p" and config.tty == nil and ui_transport_available() then
       if tmux.is_tmux then
@@ -91,7 +110,7 @@ function M.track(img, term)
     else
       result = write(config, x, y)
     end
-    if images[config.image_id] and config.action == "p" and not finishing then
+    if img and config.action == "p" and not finishing then
       finishing = true
       -- Finish after queued TUI writes, including cold asynchronous placements.
       vim.schedule(function()
@@ -103,6 +122,18 @@ function M.track(img, term)
   end
   helpers.write_graphics = function(config, data, chunk_size)
     local img = images[config.image_id]
+    config = wire_config(config, img)
+    if img and config.action == "d" and img.ipynb_tmux_clients and image_tmux.top_offset() == nil then
+      local live = image_tmux.live_clients()
+      if live then
+        local sequence = control_sequence(config)
+        for key, tty in pairs(img.ipynb_tmux_clients) do
+          -- A detach can close the PTY after tmux's live-client snapshot.
+          if live[key] == tty then pcall(helpers.write, sequence, tty, false) end
+        end
+        return
+      end
+    end
     if not img or config.tty ~= nil or not ui_transport_available() then
       return write_graphics(config, data, chunk_size)
     end

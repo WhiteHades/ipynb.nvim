@@ -26,6 +26,12 @@ package.loaded['image.utils'] = {
   window={get_window=function() end},
 }
 package.loaded['ipynb.image_terminal'] = {attach=function() end}
+local tmux_offset, tmux_notify, tmux_unwatched = 0, nil, 0
+package.loaded['ipynb.image_tmux'] = {
+  top_offset=function() return tmux_offset end,
+  watch=function(callback) tmux_notify=callback; return true end,
+  unwatch=function() tmux_unwatched=tmux_unwatched+1 end,
+}
 package.loaded['ipynb.image_kitty'] = {track=function() end}
 package.loaded['ipynb.image_style'] = {
   metrics=function() return 16, 2, 12 end,
@@ -50,6 +56,14 @@ local id = plot_api.from_file('plot.png', {
 plot_api.image_size(id)
 plot_api.render(id)
 assert(vim.wait(1000, function() return placements > 0 end, 5), 'visible plot must render')
+local visible_placements, visible_clears = placements, clears
+tmux_offset = nil
+tmux_notify()
+assert(vim.wait(1000, function() return clears > visible_clears end, 5), 'tmux notification must clear hidden plots without focus events')
+assert(placements == visible_placements and not plot.is_rendered and plot.ipynb_active)
+tmux_offset = 1
+tmux_notify()
+assert(vim.wait(1000, function() return placements > visible_placements end, 5), 'tmux notification must restore visible plots')
 local before, clear_before = placements, clears
 vim.cmd('tabnew')
 vim.cmd('redraw')
@@ -130,6 +144,8 @@ local refresh_screenpos_calls = screenpos_calls
 local refresh_clear_calls, refresh_render_calls = clears - clear_before, placements - render_before
 assert(offscreen_rows_measured == 0, 'offscreen plots must be culled before screen position measurement')
 vim.fn.screenpos = screenpos
+plot_api.clear_all()
+assert(vim.wait(1000, function() return tmux_unwatched == 1 end, 5), 'last-image cleanup must release the tmux watcher once')
 
 local ui = require('ipynb.native_ui')
 vim.g.ipynb_image_provider = 'none'

@@ -5,6 +5,7 @@ local images = {}
 local api = {}
 local term
 local backend_initialized = false
+local image_tmux = require("ipynb.image_tmux")
 local INLINE_WIDTH_FACTOR = 0.50
 local INLINE_HEIGHT_FACTOR = 0.35
 
@@ -130,6 +131,10 @@ api.from_file = function(path, opts)
     -- Guard provider-triggered redraws and asynchronous conversion callbacks too.
     img.render = function(self, geometry)
       if self.ipynb_active == false or not self.window or not vim.api.nvim_win_is_valid(self.window) then return end
+      if image_tmux.top_offset() == nil then
+        if self.is_rendered then self:clear(true) end
+        return
+      end
       if not self.global_state.enabled or self.global_state.disable_decorator_handling then return end
       if vim.api.nvim_win_get_buf(self.window) ~= self.buffer then self:clear(); return end
       if vim.api.nvim_win_get_tabpage(self.window) ~= vim.api.nvim_get_current_tabpage() then self:clear(); return end
@@ -216,6 +221,7 @@ api.from_file = function(path, opts)
       end
     end
   end
+  image_tmux.watch(function() api.refresh(true) end)
   return id
 end
 
@@ -300,21 +306,34 @@ local function render(id)
   end
 end
 
+local unwatch_pending = false
 api.clear = function(id)
   if images[id] then
     images[id].ipynb_active = false
     images[id]:clear()
     images[id] = nil
+    if not unwatch_pending then
+      unwatch_pending = true
+      vim.schedule(function()
+        unwatch_pending = false
+        if not next(images) then image_tmux.unwatch() end
+      end)
+    end
   end
 end
 
-local refresh_pending = false
-api.refresh = function()
+local refresh_pending, clear_pending = false, false
+api.refresh = function(force)
+  if force then clear_pending = true end
   if refresh_pending then return end
   refresh_pending = true
   vim.schedule(function()
     refresh_pending = false
-    if not next(images) or vim.v.exiting ~= vim.NIL then return end
+    if not next(images) or vim.v.exiting ~= vim.NIL then clear_pending = false; return end
+    if clear_pending then
+      clear_pending = false
+      for _, img in pairs(images) do img:clear(true) end
+    end
     -- Apply virtual-line changes before measuring their screen positions.
     vim.cmd("redraw")
     for id, img in pairs(images) do

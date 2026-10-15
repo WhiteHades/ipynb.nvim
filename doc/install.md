@@ -40,9 +40,9 @@ See `:help ipynb-options` for project environments and kernel selection.
 To disable images, set `opts = { images = false }` and pass `--no-images`
 to the prerequisite installer.
 
-In tmux, enable `allow-passthrough on` and `focus-events on`. Reattach existing
-clients after changing focus events. Notebook plots hide when you leave their
-pane and return when you come back. Top status rows and split offsets are included.
+In tmux, enable `allow-passthrough on`.
+Plots follow visible panes through window, session, split, zoom, and status changes.
+Focus events are optional.
 
 ## Plain Neovim without a plugin manager
 
