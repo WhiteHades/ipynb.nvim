@@ -35,6 +35,26 @@ local ui = require("ipynb.native_ui")
 ui.shutdown()
 assert(package.loaded["ipynb.molten_load_image_nvim"] == nil and package.loaded["ipynb.image_viewer"] == nil,
   "empty shutdown must not load an adapter or viewer")
+ui.configure({ image_provider = "none" })
+local formatted = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(formatted, 0, -1, false, { "```python", "print(1)", "```", "", "```python", "print(2)", "```" })
+ui.sync(formatted, {
+  { id = "format-first", begin = { 1, 0 }, ["end"] = { 1, 8 } },
+  { id = "format-second", begin = { 5, 0 }, ["end"] = { 5, 8 } },
+})
+ui.with_positions(formatted, function()
+  vim.api.nvim_buf_set_lines(formatted, 0, -1, false,
+    { "```python", "print(1)", "# formatted", "```", "", "```python", "print(2)", "```" })
+end)
+local preserved = ui.positions(formatted)
+assert(preserved[1].begin[1] == 1 and preserved[2].begin[1] == 6,
+  "whole-buffer save hooks must preserve cell identities across inserted lines")
+assert(preserved[1].source == "print(1)\n# formatted" and preserved[2].source == "print(2)")
+assert(not pcall(ui.with_positions, formatted, function() error("save hook failed") end),
+  "save hook errors must still abort saving")
+ui.clear(formatted)
+vim.api.nvim_buf_delete(formatted, { force = true })
+ui.shutdown()
 ui.configure({
   image_provider = "image.nvim",
   output_win_border = { "╭", "─", "╮", "│", "╯", "─", "╰", "│" },
@@ -67,11 +87,22 @@ end
 
 local function inline_group()
   local details = assert(output_details(), "expected inline output")
-  return details.virt_lines[1][1][2]
+  local gap = details.virt_lines[1]
+  local gap_text = table.concat(vim.tbl_map(function(chunk) return chunk[1] end, gap))
+  assert(gap[1][2] == "Normal" and gap_text ~= "" and gap_text:match("^ *$"),
+    "inline output must have a full-width normal-background gap above it")
+  return details.virt_lines[2][1][2]
 end
 
 assert(ui.sync(buf, { cell("hold") }))
 assert(inline_group() == "IpynbOutputBorderQueued")
+local image_options = calls.from_file[#calls.from_file].opts
+local image_anchor = vim.api.nvim_buf_get_extmarks(buf,
+  vim.api.nvim_get_namespaces()["ipynb-native-output"], 0, -1, {})[1][2]
+assert(image_options.y == image_anchor and image_options.render_offset_top == 2,
+  "the gap must move images within virtual output, not onto the next buffer line")
+assert(image_options.virtual_layout.virtual_height == #output_details().virt_lines,
+  "image clipping must count the normal-background gap when output is partly scrolled")
 -- Converter spans can become available after an Insert refresh at the same tick.
 local cells = package.loaded['ipynb.cells']
 vim.api.nvim_buf_set_lines(buf, -1, -1, false, {'', ''})

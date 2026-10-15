@@ -157,6 +157,10 @@ local ok, err = xpcall(function()
   vim.api.nvim_win_set_cursor(0, {insert_span.begin[1] + 1, 0})
   local insert_conversions = vim.g.ipynb_test_rpcs.code_spans or 0
   vim.defer_fn(function()
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {details=true})) do
+      assert(mark[2] ~= insert_span.begin[1] - 1 or mark[4].virt_text_pos ~= 'overlay',
+        'entering Insert without typing must reveal the opening fence')
+    end
     markdown.enable(buf)
     insert_visible = vim.api.nvim_get_mode().mode == 'i'
       and vim.fn.foldclosedend(1) == metadata_end
@@ -174,7 +178,12 @@ local ok, err = xpcall(function()
     for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {details=true})) do
       if mark[2] == insert_span['end'][1] + 2 and mark[4].virt_text_pos == 'overlay' then expanded = true end
     end
-    insert_visible = insert_visible and expanded and (vim.g.ipynb_test_rpcs.code_spans or 0) == insert_conversions
+    insert_visible = insert_visible and not expanded and (vim.g.ipynb_test_rpcs.code_spans or 0) == insert_conversions
+    result.insert_debug = {visible=insert_visible, expanded=expanded, parses=parses,
+      conversions=vim.g.ipynb_test_rpcs.code_spans, original_conversions=insert_conversions,
+      active=vim.b[buf].ipynb_markdown_active_cell, mode=vim.api.nvim_get_mode().mode,
+      fold=vim.fn.foldclosedend(1), metadata_end=metadata_end,
+      headers=#vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces()['ipynb-cell-header'], 0, -1, {})}
     if package.loaded['blink.cmp'] then
       local menu = require('blink.cmp.completion.windows.menu')
       local context = require('blink.cmp.completion.trigger.context').new({id=99999, providers={},
@@ -190,7 +199,7 @@ local ok, err = xpcall(function()
   end, 200)
   vim.api.nvim_feedkeys('i', 'nx!', false)
   vim.wait(200)
-  assert(insert_visible, 'Insert mode must retain cell frames and grow them without converter calls')
+  assert(insert_visible, 'Insert mode must reveal the active cell without converter calls')
   assert(vim.fn.foldclosedend(1) == metadata_end, 'metadata fold did not recover after Insert')
   if late_completion then
     late_completion()
@@ -262,7 +271,8 @@ local ok, err = xpcall(function()
     snapshot[1].status, snapshot[1].success, snapshot[1].old = state[1], state[2], state[3]
     ui.sync(buf, snapshot)
     local marks = vim.api.nvim_buf_get_extmarks(buf, output_ns, 0, -1, {details=true})
-    local header = marks[1][4].virt_lines[1][1]
+    assert(marks[1][4].virt_lines[1][1][2] == 'Normal', 'output must have a normal-background gap')
+    local header = marks[1][4].virt_lines[2][1]
     assert(header[1]:find(state[4], 1, true) and header[2] == 'IpynbOutputBorder' .. state[5], 'wrong inline state')
     vim.cmd('IpynbEnterOutput')
     assert(vim.api.nvim_get_current_buf() ~= buf, 'state output did not open')
@@ -341,6 +351,10 @@ local ok, err = xpcall(function()
     'notebooks must inherit normal save and autoformat settings')
   local format_calls = 0
   local format_group = vim.api.nvim_create_augroup('NotebookConfiguredFormatter', {})
+  vim.api.nvim_create_autocmd('BufWritePre', {group=format_group, pattern='*.ipynb', callback=function(event)
+    local text = vim.api.nvim_buf_get_lines(event.buf, 0, -1, false)
+    vim.api.nvim_buf_set_lines(event.buf, 0, -1, false, text)
+  end})
   vim.api.nvim_create_autocmd('BufWritePre', {group=format_group, pattern='*.py', callback=function(event)
     assert(vim.bo[event.buf].filetype == 'python', 'code formatter received the wrong filetype')
     format_calls = format_calls + 1
@@ -359,6 +373,11 @@ local ok, err = xpcall(function()
   vim.cmd('write')
   vim.cmd('write')
   assert(format_calls == 4, 'each save must use configured Python save hooks for both code cells')
+  if vim.fn.exists('#general_autosave#FocusLost') == 1 then
+    vim.bo[saved_buf].modified = true
+    vim.api.nvim_exec_autocmds('FocusLost', {modeline=false})
+    assert(not vim.bo[saved_buf].modified, 'FocusLost autosave must complete through configured save hooks')
+  end
   assert(type(vim.b[saved_buf].mtime) == 'table' and not vim.bo[saved_buf].modified,
     'repeated relative-path saves must retain the disk modification guard')
   local saved = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
@@ -430,7 +449,7 @@ local ok, err = xpcall(function()
     vim.api.nvim_exec_autocmds('VimResized', {})
     assert(vim.wait(1000, function()
       local marks = vim.api.nvim_buf_get_extmarks(saved_buf, output_ns, 0, -1, {details=true})
-      return #marks == 1 and #marks[1][4].virt_lines == rows + 2
+      return #marks == 1 and #marks[1][4].virt_lines == rows + 3
     end, 5), 'font resize must remeasure image space after the provider updates cell pixels')
   end
   assert(ui.show('font-resize'))

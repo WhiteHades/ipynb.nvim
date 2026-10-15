@@ -43,8 +43,10 @@ after installation. Missing tools need confirmation and may need sudo.
 Open a notebook with `nvim example.ipynb`. Notebook prose uses your existing
 render-markdown.nvim configuration when available. Cell labels sit in the code
 border, leaving your normal line numbers and relative numbers unchanged.
-Metadata uses a native fold, so moving down skips the whole summary. Code and
-output share a theme-derived background, without a separate focused-cell fill.
+The kernel name appears on one line. Use `zo` to edit the full metadata
+and `zc` to collapse it. Insert mode reveals the active cell's code fences and
+language name for editing. Code and output use the theme's code background,
+with the normal editor background between them.
 
 ```text
 :Ipynb or \n      Open the action menu
@@ -72,13 +74,15 @@ Enter key combinations depend on your terminal.
 
 Saved outputs return when you reopen the notebook.
 Python notebooks use the project's .venv, set up on first execution.
-Set vim.g.ipynb_animations = false in your config to stop running-cell spinners.
+Set vim.g.ipynb_animations = false in your config to stop spinners for running
+cells.
 ```
 
 Saving uses your configured synchronous save hooks for each cell's language,
 including Conform and LSP formatting. Your existing autosave settings apply.
 Configured nvim-lint tools receive embedded code, and Otter maps their diagnostics
-back to the notebook. File-only linters require Otter's `buffers.write_to_disk`.
+back to the notebook. Linters that need files require
+Otter's `buffers.write_to_disk`.
 The plugin does not select or install formatters or linters.
 
 ## Help

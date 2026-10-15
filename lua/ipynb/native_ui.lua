@@ -343,6 +343,35 @@ function M.positions(buf)
   return result
 end
 
+function M.with_positions(buf, callback)
+  local before = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local marks = vim.api.nvim_buf_get_extmarks(buf, position_ns, 0, -1, { details = true })
+  local ok, err = xpcall(callback, debug.traceback)
+  if valid_buf(buf) and #marks > 0 then
+    local after = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    -- Reapply save-hook changes as a minimal diff so whole-buffer formatters
+    -- cannot collapse every output anchor to the beginning of the notebook.
+    local shadow = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(shadow, 0, -1, false, before)
+    for _, mark in ipairs(marks) do
+      set_position(shadow, { line = mark[2], col = mark[3] }, mark[1], mark[4].right_gravity)
+    end
+    local changes = vim.diff(table.concat(before, "\n") .. "\n", table.concat(after, "\n") .. "\n",
+      { result_type = "indices", algorithm = "histogram" })
+    for index = #changes, 1, -1 do
+      local change = changes[index]
+      local start = change[1] - (change[2] > 0 and 1 or 0)
+      local replacement = vim.list_slice(after, change[3], change[3] + change[4] - 1)
+      vim.api.nvim_buf_set_lines(shadow, start, start + change[2], false, replacement)
+    end
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(shadow, position_ns, 0, -1, { details = true })) do
+      set_position(buf, { line = mark[2], col = mark[3] }, mark[1], mark[4].right_gravity)
+    end
+    vim.api.nvim_buf_delete(shadow, { force = true })
+  end
+  if not ok then error(err) end
+end
+
 function M.cells(buf)
   buf = number(buf, vim.api.nvim_get_current_buf())
   local state = buffers[buf]

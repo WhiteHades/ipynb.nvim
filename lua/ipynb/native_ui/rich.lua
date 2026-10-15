@@ -318,7 +318,7 @@ return function(state)
             window = target_win,
             x = inset,
             y = virtual and shape.row or row,
-            render_offset_top = virtual and row or 0,
+            render_offset_top = virtual and (row + (shape.padding_top or 0)) or 0,
             virtual_layout = virtual and shape or nil,
             with_virtual_padding = false,
             max_width = content_width,
@@ -370,7 +370,7 @@ return function(state)
       lines[#lines + 1] = (shape.width > 1 and "╰" or "") .. string.rep("─", math.max(0, shape.width - 2))
         .. (shape.width > 0 and "╯" or "")
     end
-    shape.virtual_height = #lines
+    shape.virtual_height = #lines + (virtual and (shape.padding_top or 0) or 0)
     return lines, records
   end
 

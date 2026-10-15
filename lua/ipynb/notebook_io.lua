@@ -72,11 +72,14 @@ local function open_notebook(jupytext, path, bufnr)
 end
 
 local function write_notebook(jupytext, path, _metadata, bufnr)
+  if bufnr == 0 then bufnr = vim.api.nvim_get_current_buf() end
   path = vim.fn.fnamemodify(path, ":p")
   local in_place = write_in_place(path, bufnr)
   local expected_mtime = in_place and vim.b[bufnr].mtime or vim.NIL
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local result = vim.fn.IpynbNotebookWrite(path, table.concat(lines, "\n"), expected_mtime)
+  local result = vim.api.nvim_buf_call(bufnr, function()
+    return vim.fn.IpynbNotebookWrite(path, table.concat(lines, "\n"), expected_mtime)
+  end)
   if in_place or vim.o.cpoptions:find("%+") ~= nil then
     vim.api.nvim_set_option_value("modified", false, { buf = bufnr })
   end
@@ -118,7 +121,9 @@ function M.attach(buf)
     buffer = buf, group = group, nested = true,
     callback = function(event)
       vim.api.nvim_buf_call(buf, function()
-        vim.api.nvim_exec_autocmds("BufWritePre", { pattern = event.file, modeline = false })
+        require("ipynb.native_ui").with_positions(buf, function()
+          vim.api.nvim_exec_autocmds("BufWritePre", { buffer = buf, modeline = false })
+        end)
         write_notebook(state.jupytext, event.file, nil, buf)
         vim.api.nvim_exec_autocmds("BufWritePost", { pattern = event.file, modeline = false })
       end)

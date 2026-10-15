@@ -19,11 +19,14 @@ function M.refresh(buf)
   end
   if not width or width < 20 then return end
   local animate = vim.g.ipynb_animations ~= false and vim.g.snacks_animate ~= false and #vim.api.nvim_list_uis() > 0
+  local editing = vim.api.nvim_get_current_buf() == buf and vim.api.nvim_get_mode().mode:match("^[iR]")
+  local active = editing and vim.b[buf].ipynb_markdown_active_cell
+  local active_row = active and tonumber(active:match("^(%d+):"))
   local busy = false
   for index, cell in ipairs(require("ipynb.native_ui").cell_headers(buf)) do
     local row = cell.row
     local fence = row >= 0 and (vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or "") or ""
-    if row >= 0 and fence:match("^```") then
+    if row >= 0 and row ~= active_row and fence:match("^```") then
       local count = type(cell.execution_count) == "number" and tostring(cell.execution_count) or " "
       local label = cell.status == "running" and "Running" or cell.status == "hold" and "Queued"
         or cell.status == "new" and "Ready" or cell.success == false and "Failed"

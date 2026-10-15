@@ -177,6 +177,7 @@ return function(state, rich)
     if not force and cell.ui.virt_mark and cell.ui.virt_key == key then return end
     local lines = rich.render_body(cell, {
       row = anchor.line,
+      padding_top = 1,
       width = width,
       height = info.height,
     }, cell.buf, win, true)
@@ -184,13 +185,14 @@ return function(state, rich)
     for index, line in ipairs(lines) do
       if line:find("More lines", 1, true) then cell.ui.mouse_more = { win = win, row = index }; break end
     end
-    local virt_lines = {}
+    local virt_lines = { { { string.rep(" ", width), "Normal" } } }
     for index, line in ipairs(lines) do
       local group = (index == 1 or index == #lines) and rich.border_group(cell) or "IpynbVirtualText"
       virt_lines[#virt_lines + 1] = line:match("^│.*│$")
         and { { "│", rich.border_group(cell) }, { line:sub(4, -4), group }, { "│", rich.border_group(cell) } }
         or { { line, group } }
     end
+    if cell.ui.mouse_more then cell.ui.mouse_more.row = cell.ui.mouse_more.row + 1 end
     local mark_options = { virt_lines = virt_lines, strict = false }
     if cell.ui.virt_mark then mark_options.id = cell.ui.virt_mark end
     cell.ui.virt_mark = vim.api.nvim_buf_set_extmark(cell.buf, output_ns, anchor.line, 0, mark_options)
