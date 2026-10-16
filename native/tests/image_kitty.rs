@@ -99,6 +99,7 @@ end}, 0, {}
 local offset_queries, live_queries = 0, 0
 local live_rows = '101 55 /dev/pts/1 @2 0\n202 66 /dev/pts/2 @2 0\n303 77 /dev/pts/3 @2 1\n'
 local reply = '1 1 1 top on 40 0 0 0\n'
+local pane_left, pane_top = 12, 7
 package.preload['image/utils/tmux'] = function() return tmux end
 package.loaded['image/utils/tmux'] = nil
 local last, count = nil, 0
@@ -124,6 +125,9 @@ vim.fn.system = function(command)
   if command[2] == 'list-clients' then live_queries = live_queries + 1; return live_rows end
   assert(command[2] == 'display-message' and command[4] == '-t' and command[5] == '%42')
   offset_queries = offset_queries + 1
+  if command[6]:find('#{pane_left}', 1, true) then
+    return reply:gsub('%s*$', '') .. ' ' .. pane_left .. ' ' .. pane_top .. '\n'
+  end
   return reply
 end
 vim.schedule = function(callback) scheduled[#scheduled + 1] = callback end
@@ -172,7 +176,11 @@ tmux.is_tmux = true
 helpers.write_graphics_at(other, 4, 6)
 assert(last.x == 16 and last.y == 13 and receiver_queries + offset_queries == before_queries)
 -- Exercise the serialized UI path with a tmux status-row offset and passthrough escaping.
-tmux.get_pane_position = function() return {left=12, top=7} end
+local position_queries = 0
+tmux.get_pane_position = function()
+  position_queries = position_queries + 1
+  return {left=pane_left, top=pane_top}
+end
 tmux.escape = function(value) return '\27Ptmux;' .. value:gsub('\27', '\27\27') .. '\27\\' end
 vim.api.nvim_list_uis = function() return {{stdout_tty=true}} end
 package.loaded['ipynb.image_kitty'], package.loaded['ipynb.image_tmux'] = nil, nil
@@ -190,10 +198,24 @@ assert(#sent == before_sent + 1 and sent[#sent]:find('\27Ptmux;') == 1, vim.insp
 assert(sent[#sent]:find('\27\27%[14;16H') ~= nil, vim.inspect(sent[#sent]))
 assert(sent[#sent]:find('i=' .. transport_img.ipynb_wire_id, 1, true), 'placement must use the private Kitty wire ID')
 assert(transport_img.internal_id == 7 and config.image_id == 7, 'placement must preserve internal ID and caller config')
+assert(position_queries == 0, 'placement must reuse the validated visibility and pane position snapshot')
 vim.fn.writefile({vim.json.encode({cold=cold, loads=loads, writes=writes, sent=sent, graphics_fallbacks=graphics_fallbacks, original=config,
   other=other, result=result, counts=counts, delays=delays, before=before, finishes=finishes,
   survived=survived, failure=failure, warnings=warnings, wire_id=img.ipynb_wire_id})}, vim.env.IPYNB_TEST_REPORT)
 -- Transmit and hidden cleanup reuse the wire ID and target only original live receivers.
+batch()
+pane_left, pane_top = 9, 3
+helpers.write_graphics_at(config, 4, 6)
+assert(sent[#sent]:find('\27\27%[10;13H'), 'next batch must use the new pane position')
+assert(position_queries == 0, 'pane position must not launch a separate query')
+batch()
+pane_left = 'invalid'
+local placements_before = #sent
+helpers.write_graphics_at(config, 4, 6)
+assert(#sent == placements_before, 'malformed pane coordinates must suppress placement')
+batch()
+pane_left, pane_top = 12, 7
+helpers.write_graphics_at(config, 4, 6)
 batch()
 local transmit_config = {action='t', image_id=7, transmit_medium='f'}
 local transmit_start = #sent

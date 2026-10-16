@@ -142,11 +142,13 @@ if loaded and tmux.is_tmux and tmux.get_pane_tty then
   end
 end
 
--- image.nvim already adds pane_left/pane_top. Passthrough coordinates also
--- include top status rows, which tmux omits from pane_top.
+-- Read visibility and pane position together; pane_top excludes top status rows.
 function M.top_offset()
-  if not loaded or not tmux.is_tmux then return 0 end
-  if offset ~= nil then return offset or nil end
+  if not loaded or not tmux.is_tmux then return 0, 0, 0 end
+  if offset ~= nil then
+    if offset then return unpack(offset) end
+    return nil
+  end
   offset = false
   -- Share one snapshot across a render batch, then recheck slow callbacks.
   vim.schedule(function() offset = nil end)
@@ -156,19 +158,19 @@ function M.top_offset()
     "tmux", "display-message", "-p", "-t", pane,
     "#{window_active} #{pane_active} #{==:#{client_session},#{session_name}} "
       .. "#{status-position} #{status} #{client_height} #{client_control_mode} "
-      .. "#{window_zoomed_flag} #{pane_zoomed_flag}",
+      .. "#{window_zoomed_flag} #{pane_zoomed_flag} #{pane_left} #{pane_top}",
   })
   if not ok or vim.v.shell_error ~= 0 then return nil end
-  local window, _, session, position, status, height, control, zoomed, pane_zoomed = result:match(
-    "^(%d+) (%d+) (%d+) (%a+) (%w+) (%d+) (%d+) (%d+) (%d+)%s*$"
+  local window, _, session, position, status, height, control, zoomed, pane_zoomed, left, top = result:match(
+    "^(%d+) (%d+) (%d+) (%a+) (%w+) (%d+) (%d+) (%d+) (%d+) (%d+) (%d+)%s*$"
   )
   if window ~= "1" or session ~= "1" or control ~= "0"
     or (zoomed ~= "0" and pane_zoomed ~= "1") then return nil end
   local rows = status == "on" and 1 or status == "off" and 0 or tonumber(status)
   if not rows or rows < 0 or rows > 5 or (position ~= "top" and position ~= "bottom") then return nil end
   -- tmux suppresses status when the client cannot fit its configured rows.
-  offset = position == "top" and tonumber(height) > rows and rows or 0
-  return offset
+  offset = { position == "top" and tonumber(height) > rows and rows or 0, tonumber(left), tonumber(top) }
+  return unpack(offset)
 end
 
 function M.watch(callback)

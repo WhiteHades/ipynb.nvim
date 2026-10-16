@@ -80,9 +80,11 @@ function M.track(img, term)
   end
   helpers.write_graphics_at = function(config, x, y)
     local img = images[config.image_id]
+    local pane_left, pane_top
     if img and config.action == "p" then
       if img.global_state.disable_decorator_handling then return end
-      local offset = image_tmux.top_offset()
+      local offset
+      offset, pane_left, pane_top = image_tmux.top_offset()
       if offset == nil then return end
       y = y + offset
       if tmux.is_tmux and img.ipynb_wire_id then img.ipynb_tmux_clients = image_tmux.visible_clients() end
@@ -102,8 +104,7 @@ function M.track(img, term)
     local result
     if img and config.action == "p" and config.tty == nil and ui_transport_available() then
       if tmux.is_tmux then
-        local position = tmux.get_pane_position()
-        x, y = x + position.left, y + position.top
+        x, y = x + pane_left, y + pane_top
       end
       send("\x1b[?2026h\x1b[s\x1b[" .. y .. ";" .. x .. "H" .. control_sequence(config) .. "\x1b[u\x1b[?2026l", tmux)
       transport_pending = true
