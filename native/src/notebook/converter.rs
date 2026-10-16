@@ -87,6 +87,7 @@ impl Converter {
         self.convert_at(text, existing, None)
     }
 
+    #[cfg(test)]
     pub fn convert_at(
         &mut self,
         text: &str,

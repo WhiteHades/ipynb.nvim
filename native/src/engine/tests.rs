@@ -487,6 +487,15 @@ fn jupytext_config_pair_sync_and_export_keep_outputs_and_reject_conflicts() -> R
     let source = "# First\n\n# Second\n\n```python\nprint(1)\n```";
     let parsed = engine.converter.convert_at(source, None, Some(&path))?;
     assert_eq!(parsed["cells"].as_array().unwrap().len(), 2);
+    let uncached = engine.converter.call(&json!({
+        "op":"convert", "text":"```python\nprint(9)\n```", "existing":null,
+        "path":path, "cache":false,
+    }))?;
+    assert_eq!(text(&uncached["cells"][0]["source"]), "print(9)");
+    assert_eq!(
+        engine.converter.convert_at(source, None, Some(&path))?,
+        parsed
+    );
     std::fs::write(&config, format!("{settings}split_at_heading = true\n"))?;
     std::fs::File::options()
         .write(true)
@@ -511,10 +520,22 @@ fn jupytext_config_pair_sync_and_export_keep_outputs_and_reject_conflicts() -> R
     assert!(
         engine
             .converter
+            .call(&json!({
+                "op":"convert", "text":"```python\nprint(9)\n```", "existing":null,
+                "path":path, "cache":false,
+            }))
+            .is_err()
+    );
+    assert!(
+        engine
+            .converter
             .convert_at(source, None, Some(&path))
             .is_err()
     );
     std::fs::write(&config, &settings)?;
+    let normal = engine.converter.convert_at(source, None, Some(&path))?;
+    assert_eq!(normal["cells"][1]["source"], parsed["cells"][1]["source"]);
+    assert_eq!(normal["cells"][1]["outputs"], parsed["cells"][1]["outputs"]);
     let mut existing = parsed.clone();
     existing["cells"][1]["outputs"] =
         json!([{"output_type":"stream","name":"stdout","text":"kept\n"}]);

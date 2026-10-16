@@ -157,9 +157,10 @@ def read_request(request: dict[str, Any]) -> dict[str, Any]:
 def convert_request(request: dict[str, Any]) -> Any:
     config = _context(request["path"])[1] if request.get("path") else None
     global _convert_cache
+    cache = request.get("cache") is not False
     text = str(request.get("text", ""))
     key = None
-    if len(text) <= 1_000_000:
+    if cache and len(text) <= 1_000_000:
         try:
             traits = config.traits(config=True) if config is not None else None
             settings = (
@@ -178,9 +179,10 @@ def convert_request(request: dict[str, Any]) -> Any:
     if key is not None and _convert_cache is not None and _convert_cache[0] == key:
         source = _convert_cache[1]
     else:
-        _convert_cache = None
+        if cache:
+            _convert_cache = None
         source = jupytext.reads(text, fmt="md:markdown", config=config)
-        if key is not None and len(source.cells) <= 4096:
+        if cache and key is not None and len(source.cells) <= 4096:
             _convert_cache = (key, source)
     if _convert_cache is not None and source is _convert_cache[1]:
         # Classification replaces metadata; output merging also mutates cells.

@@ -98,7 +98,13 @@ pub(super) fn positioned_sources(
         .map(|(_, id, marker, _)| (marker.as_str(), *id))
         .collect();
     // Let Jupytext locate the spans; source searches also match prose and duplicate cells.
-    let converted = converter.convert_at(&marked, None, path)?;
+    let converted = converter.call(&json!({
+        "op": "convert",
+        "text": marked,
+        "existing": null,
+        "path": path,
+        "cache": false,
+    }))?;
     let mut sources = Vec::new();
     let mut positions = HashMap::new();
     for cell in converted["cells"]
