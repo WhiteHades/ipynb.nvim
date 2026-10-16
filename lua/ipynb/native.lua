@@ -318,7 +318,15 @@ end
 
 function M.call(name, args, bang)
   args = args or {}
-  if name == "IpynbNotebookRead" then return M.request("read", { path = args[1], template = args[2] }) end
+  if name == "IpynbNotebookRead" then
+    local result = M.request("read", { path = args[1], template = args[2], readonly = vim.bo.readonly })
+    if result.recovery_backup then
+      vim.schedule(function()
+        vim.notify("Recovered Jupytext Markdown as notebook JSON. Original saved at " .. result.recovery_backup)
+      end)
+    end
+    return result
+  end
   if name == "IpynbNotebookWrite" then
     local p = context()
     p.path, p.text, p.mtime = args[1], args[2], args[3]

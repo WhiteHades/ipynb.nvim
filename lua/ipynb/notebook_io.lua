@@ -55,15 +55,25 @@ end
 
 local function open_fallback(jupytext, path, bufnr)
   local source = vim.uv.fs_realpath(path)
-  if source and option(jupytext, "autosync") then
+  local recovered
+  if source and local_notebook(path) then
+    local prefix = vim.fn.readfile(source, "", 2)
+    if prefix[1] == "---" and prefix[2] == "jupyter:" then
+      recovered = vim.api.nvim_buf_call(bufnr, function()
+        return vim.fn.IpynbNotebookRead(source, option(jupytext, "new_template"))
+      end)
+    end
+  end
+  if source and option(jupytext, "autosync") and not (recovered and recovered.recovery_pending) then
     jupytext_command({ option(jupytext, "jupytext"), "--sync", source })
   end
   local lines = jupytext.read_file(source or option(jupytext, "new_template"), true)
-  local metadata = jupytext.get_metadata(lines)
+  local metadata = recovered and recovered.metadata or jupytext.get_metadata(lines)
+  local input_format = recovered and recovered.recovery_pending and "md:markdown" or "ipynb"
   local format = option(jupytext, "format")
   if type(format) == "function" then format = format(source, metadata) end
-  if format ~= "ipynb" then
-    local text = jupytext_command({ option(jupytext, "jupytext"), "--from", "ipynb",
+  if format ~= input_format then
+    local text = jupytext_command({ option(jupytext, "jupytext"), "--from", input_format,
       "--to", format, "--output", "-" }, lines)
     lines = vim.split(text:gsub("\n$", ""), "\n", { plain = true })
   end
@@ -81,7 +91,9 @@ local function open_notebook(jupytext, path, bufnr)
   -- would otherwise collapse onto EOF and be reused for the reloaded cells.
   local ui = package.loaded["ipynb.native_ui"]
   if ui then ui.clear(bufnr) end
-  local result = vim.fn.IpynbNotebookRead(path, option(jupytext, "new_template"))
+  local result = vim.api.nvim_buf_call(bufnr, function()
+    return vim.fn.IpynbNotebookRead(path, option(jupytext, "new_template"))
+  end)
   local text = result.text or ""
   local lines = vim.split(text, "\n", { plain = true })
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)

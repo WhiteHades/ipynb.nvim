@@ -66,7 +66,7 @@ def _notebook(value: Any) -> Any:
     return nbformat.reads(json.dumps(value), as_version=4)
 
 
-def _read(request: dict[str, Any], path: Path, config: Any) -> tuple[Any, str | None]:
+def _read(request: dict[str, Any], path: Path, config: Any) -> tuple[Any, str | None, bool]:
     data = path.read_bytes() if path.is_file() else None
     source = data
     if not source:
@@ -74,9 +74,20 @@ def _read(request: dict[str, Any], path: Path, config: Any) -> tuple[Any, str | 
         if not template.is_file():
             raise FileNotFoundError(f"notebook or template not found: {path}")
         source = template.read_bytes()
-    notebook = jupytext.reads(source.decode("utf-8"), fmt="ipynb", as_version=4, config=config)
+    content = source.decode("utf-8")
+    recovered = False
+    try:
+        notebook = jupytext.reads(content, fmt="ipynb", as_version=4, config=config)
+    except nbformat.reader.NotJSONError:
+        if (not data or path.suffix != ".ipynb"
+                or content.lstrip("\ufeff").splitlines()[:2] != ["---", "jupyter:"]
+                or read_format_from_metadata(content, ".md") != "markdown"):
+            raise
+        notebook = jupytext.reads(content, fmt="md:markdown", as_version=4, config=config)
+        nbformat.validate(notebook)
+        recovered = True
     rearrange_jupytext_metadata(notebook.metadata)
-    return notebook, sha256(data).hexdigest() if data is not None else None
+    return notebook, sha256(data).hexdigest() if data is not None else None, recovered
 
 
 def _pairs(notebook: Any, path: Path, config: Any) -> list[dict[str, Any]]:
@@ -99,8 +110,10 @@ def _result(notebook: Any, path: Path, config: Any, filename: str | None) -> dic
 
 def read_request(request: dict[str, Any]) -> dict[str, Any]:
     path, config, filename = _context(request.get("path"))
-    notebook, digest = _read(request, path, config)
+    notebook, digest, recovered = _read(request, path, config)
     result = _result(notebook, path, config, filename)
+    if recovered:
+        result["recovery_digest"] = digest
     divergent = []
     for pair in result["pairs"]:
         if pair["path"] == str(path):

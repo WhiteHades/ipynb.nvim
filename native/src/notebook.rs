@@ -141,6 +141,13 @@ fn check_mtime(path: &Path, expected: Option<Mtime>) -> Result<()> {
     Ok(())
 }
 
+fn checked_digest(value: &str) -> Result<&str> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("expected digest must be a 64-character SHA-256 hex string");
+    }
+    Ok(value)
+}
+
 pub fn read_json(path: &Path) -> Result<Value> {
     let bytes =
         fs::read(path).with_context(|| format!("could not read notebook {}", path.display()))?;
@@ -252,6 +259,72 @@ pub(crate) fn write_representation_atomic(
     })
 }
 
+pub(crate) fn recover_markdown(
+    path: &Path,
+    notebook: &Value,
+    source_digest: &str,
+) -> Result<PathBuf> {
+    checked_digest(source_digest)?;
+    let target = write_target(path)?;
+    let before = file_mtime(&target)?.context("notebook disappeared during recovery")?;
+    let source = fs::read(&target)
+        .with_context(|| format!("could not read notebook {}", target.display()))?;
+    let after = file_mtime(&target)?.context("notebook disappeared during recovery")?;
+    if before != after {
+        bail!("notebook changed on disk during recovery");
+    }
+    if !source_digest.eq_ignore_ascii_case(&file_digest_bytes(&source)) {
+        bail!("notebook source digest does not match");
+    }
+    let content = std::str::from_utf8(&source).context("Jupytext source is not UTF-8")?;
+    let filename = target
+        .file_name()
+        .context("notebook path has no filename")?
+        .to_string_lossy();
+    let backup = target.with_file_name(format!("{filename}.recovery-{source_digest}.bak"));
+    match fs::symlink_metadata(&backup) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            if fs::read(&backup)? != source {
+                bail!("recovery backup already exists with different contents");
+            }
+        }
+        Ok(_) => bail!("recovery backup is not a regular file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_representation_atomic(&backup, &json!({"content": content}), None)?;
+            if !fs::symlink_metadata(&backup)?.file_type().is_file() {
+                bail!("created recovery backup is not a regular file");
+            }
+            if fs::read(&backup)? != source {
+                bail!("recovery backup contents do not match source");
+            }
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not read {}", backup.display()));
+        }
+    }
+    File::open(&backup)
+        .with_context(|| format!("could not open {} for fsync", backup.display()))?
+        .sync_all()
+        .with_context(|| format!("could not fsync {}", backup.display()))?;
+    File::open(
+        backup
+            .parent()
+            .context("backup path has no parent directory")?,
+    )?
+    .sync_all()
+    .context("could not fsync recovery backup directory")?;
+    write_atomic(
+        path,
+        notebook,
+        Some(&json!({"mtime": after, "digest": source_digest})),
+    )?;
+    Ok(backup)
+}
+
+fn file_digest_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 fn write_file_atomic(
     path: &Path,
     expected: Option<&Value>,
@@ -259,6 +332,16 @@ fn write_file_atomic(
     write: impl FnOnce(&mut BufWriter<&mut File>) -> Result<()>,
 ) -> Result<Value> {
     let target = write_target(path)?;
+    let expected_digest = expected
+        .and_then(|value| value.get("digest"))
+        .map(|value| {
+            value
+                .as_str()
+                .context("expected digest must be a string")
+                .and_then(checked_digest)
+                .map(str::to_owned)
+        })
+        .transpose()?;
     let expected = expected_mtime(expected)?;
     check_mtime(&target, expected)?;
 
@@ -322,6 +405,11 @@ fn write_file_atomic(
     // The conversion can take long enough for another process to modify the
     // file. Check once more immediately before the replacement.
     check_mtime(&target, expected)?;
+    if let Some(expected_digest) = expected_digest {
+        if !expected_digest.eq_ignore_ascii_case(&file_digest_bytes(&fs::read(&target)?)) {
+            bail!("notebook changed on disk since it was opened");
+        }
+    }
     if create_new {
         temporary.persist_noclobber(&target)
     } else {
@@ -382,6 +470,64 @@ mod tests {
         fs::create_dir(&blocked)?;
         assert!(write_atomic(&blocked, &original, None).is_err());
         assert!(blocked.is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn markdown_recovery_preserves_source_and_guards_replacement() -> Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("notebook.ipynb");
+        let source = b"# notebook\n\ntext\n";
+        fs::write(&path, source)?;
+        let digest = format!("{:x}", Sha256::digest(source));
+        let mtime = file_mtime(&path)?.context("missing source mtime")?;
+        let notebook = json!({"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5});
+
+        let mut wrong = digest.clone();
+        wrong.replace_range(0..1, if &wrong[..1] == "0" { "1" } else { "0" });
+        assert!(recover_markdown(&path, &notebook, &wrong).is_err());
+        assert_eq!(file_mtime(&path)?, Some(mtime));
+        assert_eq!(fs::read(&path)?, source);
+
+        let backup = recover_markdown(&path, &notebook, &digest)?;
+        assert_eq!(fs::read(&backup)?, source);
+        assert_eq!(read_json(&path)?, notebook);
+
+        fs::write(&path, source)?;
+        let reused = recover_markdown(&path, &notebook, &digest)?;
+        assert_eq!(reused, backup);
+        assert_eq!(fs::read(&backup)?, source);
+
+        fs::write(&path, source)?;
+        fs::write(&backup, b"different")?;
+        assert!(recover_markdown(&path, &notebook, &digest).is_err());
+        assert_eq!(fs::read(&path)?, source);
+
+        #[cfg(unix)]
+        {
+            fs::remove_file(&backup)?;
+            std::os::unix::fs::symlink(&path, &backup)?;
+            assert!(recover_markdown(&path, &notebook, &digest).is_err());
+            assert!(fs::symlink_metadata(&backup)?.file_type().is_symlink());
+            assert_eq!(fs::read(&path)?, source);
+        }
+
+        let unchanged_mtime = fs::metadata(&path)?.modified()?;
+        let error = write_file_atomic(
+            &path,
+            Some(&json!({"mtime": file_mtime(&path)?.unwrap(), "digest": digest})),
+            false,
+            |output| {
+                fs::write(&path, b"intervening same-mtime edit")?;
+                File::open(&path)?
+                    .set_times(std::fs::FileTimes::new().set_modified(unchanged_mtime))?;
+                output.write_all(b"replacement")?;
+                Ok(())
+            },
+        )
+        .expect_err("digest guard must reject a same-mtime edit");
+        assert!(error.to_string().contains("changed on disk"));
+        assert_eq!(fs::read(&path)?, b"intervening same-mtime edit");
         Ok(())
     }
 }

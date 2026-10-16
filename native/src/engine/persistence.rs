@@ -81,8 +81,9 @@ impl Engine {
     }
 
     fn read_compatible_notebook(&mut self, path: &Path) -> Result<Value> {
-        let notebook = notebook::read_json(path)?;
-        if notebook["nbformat"] == 4 {
+        if let Ok(notebook) = notebook::read_json(path)
+            && notebook["nbformat"] == 4
+        {
             return Ok(notebook);
         }
         let mut converted = self.converter.read(path, Path::new(""))?;
@@ -99,6 +100,21 @@ impl Engine {
         if before != after {
             bail!("Notebook changed on disk while it was opened");
         }
+        if let Some(digest) = result["recovery_digest"].as_str()
+            && params["readonly"] != true
+        {
+            if params["recovery_attempted"] == true {
+                bail!("Notebook changed again during recovery; reopen it");
+            }
+            let mut notebook = result["notebook"].clone();
+            notebook::split_lines(&mut notebook);
+            let backup = notebook::recover_markdown(path, &notebook, digest)?;
+            let mut retry = params.clone();
+            retry["recovery_attempted"] = json!(true);
+            let mut recovered = self.read(&retry)?;
+            recovered["recovery_backup"] = json!(backup);
+            return Ok(recovered);
+        }
         self.remember_pairs(path, &result)?;
         self.read_cache = before
             .filter(|_| before == after)
@@ -110,7 +126,8 @@ impl Engine {
                 notebook: result["notebook"].take(),
             });
         Ok(
-            json!({"text":result["text"], "metadata":result["metadata"], "paired_changed":result["divergent"]}),
+            json!({"text":result["text"], "metadata":result["metadata"], "paired_changed":result["divergent"],
+                "recovery_pending":result["recovery_digest"].is_string()}),
         )
     }
 
@@ -121,7 +138,7 @@ impl Engine {
     pub(super) fn current_notebook(&mut self, params: &Value) -> Result<Value> {
         let path = Self::path(params)?;
         let existing = if path.is_file() && std::fs::metadata(path)?.len() > 0 {
-            Some(notebook::read_json(path)?)
+            Some(self.read_compatible_notebook(path)?)
         } else {
             None
         };

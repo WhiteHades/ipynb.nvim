@@ -365,6 +365,46 @@ fn save_engine() -> Result<Engine> {
 }
 
 #[test]
+fn misplaced_jupytext_markdown_recovers_without_losing_source() -> Result<()> {
+    let directory = save_directory()?;
+    let path = directory.path().join("recovered.ipynb");
+    let source = "---\njupyter:\n  jupytext:\n    text_representation:\n      extension: .md\n      format_name: markdown\n---\n\n# Notes\n\n```python\nprint(42)\n```\n";
+    std::fs::write(&path, source)?;
+    let mut engine = save_engine()?;
+    let readonly = engine.read(&json!({"path":path,"readonly":true}))?;
+    assert_eq!(std::fs::read_to_string(&path)?, source);
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 1);
+    assert_eq!(readonly["recovery_pending"], true);
+    let recovered = engine.read(&json!({"path":path}))?;
+    assert_eq!(
+        std::fs::read_to_string(recovered["recovery_backup"].as_str().unwrap())?,
+        source
+    );
+    assert_eq!(recovered["text"], readonly["text"]);
+    let notebook = notebook::read_json(&path)?;
+    assert_eq!(notebook["cells"].as_array().unwrap().len(), 2);
+    assert_eq!(text(&notebook["cells"][1]["source"]), "print(42)");
+    let lines: Vec<_> = recovered["text"].as_str().unwrap().split('\n').collect();
+    let row = lines.iter().position(|line| *line == "```python").unwrap() + 1;
+    engine.import(&json!({"path":path,"buf":1,"preview":true,"lines":lines,
+        "spans":[{"begin":[row,0],"end":[row,lines[row].len()]}]}))?;
+    assert_eq!(engine.cells.len(), 1);
+    engine.write(&json!({"path":path,"buf":1,"text":recovered["text"],
+        "mtime":notebook::file_mtime(&path)?}))?;
+    assert_eq!(notebook::read_json(&path)?["cells"], notebook["cells"]);
+    for invalid in [
+        "{broken",
+        "# ordinary markdown",
+        "---\njupyter:\n  kernelspec: {}\n---\n",
+    ] {
+        std::fs::write(&path, invalid)?;
+        assert!(engine.read(&json!({"path":path})).is_err());
+        assert_eq!(std::fs::read_to_string(&path)?, invalid);
+    }
+    Ok(())
+}
+
+#[test]
 fn initial_preview_reuses_verified_conversion_without_guessing_spans() -> Result<()> {
     let directory = save_directory()?;
     let path = directory.path().join("cached.ipynb");

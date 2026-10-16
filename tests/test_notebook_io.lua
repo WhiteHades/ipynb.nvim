@@ -129,6 +129,36 @@ assert(jupytext.open_notebook("lazy.ipynb", buffer).lazy == 1)
 assert(vim.b[buffer].ipynb_read_kernel == false)
 assert(original_reads == 3)
 
+vim.cmd([[
+  function! IpynbNotebookRead(path, template) abort
+    let g:rpc_read_buffer = bufnr()
+    let g:rpc_read_readonly = &l:readonly
+    return {'text': 'recovered', 'metadata': {'from': 'recovered'}, 'recovery_pending': v:true}
+  endfunction
+]])
+local hidden = vim.api.nvim_create_buf(false, true)
+vim.bo[hidden].readonly = true
+assert(jupytext.open_notebook("hidden.ipynb", hidden).from == "recovered")
+assert(vim.g.rpc_read_buffer == hidden and vim.g.rpc_read_readonly == 1,
+  "opening a noncurrent notebook must use the target buffer's readonly setting")
+assert(vim.api.nvim_get_current_buf() == buffer)
+local recovery_path = vim.fn.tempname() .. ".ipynb"
+local recovery_lines = { "---", "jupyter:", "---", "", "```python", "print(42)", "```" }
+vim.fn.writefile(recovery_lines, recovery_path)
+settings.format, settings.autosync = "py:percent", true
+jupytext.read_file = function(file) return vim.fn.readfile(file) end
+vim.system = function(command, opts)
+  assert(command[2] == "--from" and command[3] == "md:markdown" and command[5] == "py:percent",
+    "readonly recovered Markdown must not run sync or be parsed as JSON")
+  assert(vim.deep_equal(opts.stdin, recovery_lines))
+  return { wait = function() return { code = 0, stdout = "print(42)\n" } end }
+end
+assert(jupytext.open_notebook(recovery_path, hidden).from == "recovered")
+assert(vim.g.rpc_read_buffer == hidden and vim.g.rpc_read_readonly == 1)
+assert(vim.deep_equal(vim.fn.readfile(recovery_path), recovery_lines))
+vim.system = system
+vim.fn.delete(recovery_path)
+vim.api.nvim_buf_delete(hidden, { force = true })
 vim.fn.delete(path)
 print("pass: notebook IO success, failure, and fallback behavior")
 vim.cmd("qa!")
