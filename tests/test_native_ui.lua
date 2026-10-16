@@ -808,6 +808,20 @@ resize_grid(12, 5)
 ui.hide()
 assert(not ui.show("grid") and not visible_inspector() and has_inline_output(),
   "a terminal below the border and gap minimum must fall back without a float")
+resize_grid(80, 24)
+ui.clear(grid)
+local low_end = vim.api.nvim_win_get_height(grid_win) - 5
+local low_lines = {}
+for _ = 1, low_end + 3 do low_lines[#low_lines + 1] = "print(1)" end
+vim.api.nvim_buf_set_lines(grid, 0, -1, false, low_lines)
+vim.api.nvim_win_set_cursor(grid_win, { 1, 0 })
+vim.b[grid].ipynb_code_spans = { { begin = { 0, 0 }, ["end"] = { low_end, 8 } } }
+vim.b[grid].ipynb_code_spans_tick = vim.api.nvim_buf_get_changedtick(grid)
+ui.sync(grid, { { id = "low", begin = { 0, 0 }, ["end"] = { low_end, 8 }, lines = traceback.lines } })
+assert(ui.show("low"))
+local low_win = assert(visible_inspector())
+assert(vim.api.nvim_win_get_height(low_win) >= 3,
+  "opening expanded output near the bottom must reveal more than its heading")
 resize_grid(100, 40)
 ui.clear(grid)
 vim.api.nvim_buf_delete(grid, { force = true })

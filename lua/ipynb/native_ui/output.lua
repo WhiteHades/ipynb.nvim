@@ -315,7 +315,8 @@ return function(state, rich)
     local border_width, border_height = border_size(border)
     local anchor_row = source_relative_row(source, end_pos.line)
     local row = anchor_row and anchor_row + 2 or info.height
-    if reveal and row + border_height >= info.height and info.height > border_height + 2 then
+    local minimum_height = math.min(3, number(state.options.output_win_max_height, 999999))
+    if reveal and row + border_height + minimum_height > info.height and info.height > border_height + 2 then
       vim.api.nvim_win_call(source, function()
         vim.api.nvim_win_set_cursor(source, { end_pos.line + 1, 0 })
         vim.cmd("normal! zt")
