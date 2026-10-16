@@ -339,5 +339,78 @@ if #vim.api.nvim_list_uis() > 0 then
   if vim.env.IPYNB_TEST_COLOR_REPORT then vim.fn.writefile({ tostring(checks) }, vim.env.IPYNB_TEST_COLOR_REPORT) end
   vim.api.nvim_buf_delete(colors, { force = true })
 end
+local original_snacks = rawget(_G, "Snacks")
+local original_provider, original_extmark = vim.api.nvim_set_decoration_provider, vim.api.nvim_buf_set_extmark
+local provider, scope_callback, rendered_scope, guide_marks, scope_stopped
+_G.Snacks = {
+  indent = {
+    enabled = true,
+    render_scope = function(scope, state) rendered_scope = { scope = scope, state = state } end,
+    render_chunk = function(scope, state) rendered_scope = { scope = scope, state = state } end,
+  },
+  config = { get = function(_, defaults) return vim.deepcopy(defaults) end },
+  scope = { attach = function(callback)
+    scope_callback = callback
+    return { update = function() end, disable = function() scope_stopped = true end }
+  end },
+  animate = { enabled = function() return false end },
+  util = { redraw_range = function() end },
+}
+vim.api.nvim_set_decoration_provider = function(ns, value)
+  if ns == vim.api.nvim_get_namespaces()["ipynb-code-guides"] then provider = value end
+  return original_provider(ns, value)
+end
+local guide_ns = vim.api.nvim_create_namespace("ipynb-code-guides")
+vim.api.nvim_buf_set_extmark = function(buf, ns, row, col, opts)
+  if ns == guide_ns and opts.virt_text then
+    guide_marks[#guide_marks + 1] = { row = row, col = opts.virt_text_win_col }
+  end
+  if opts.ephemeral then opts = vim.deepcopy(opts); opts.ephemeral = nil end
+  return original_extmark(buf, ns, row, col, opts)
+end
+local guidebuf = vim.api.nvim_create_buf(false, true)
+local pythonbuf = vim.api.nvim_create_buf(false, true)
+vim.bo[pythonbuf].shiftwidth, vim.bo[pythonbuf].tabstop = 4, 4
+package.loaded["otter.keeper"] = { rafts = { [guidebuf] = { buffers = { python = pythonbuf } } } }
+guide_marks = {}
+vim.api.nvim_set_current_buf(guidebuf)
+vim.api.nvim_buf_set_name(guidebuf, vim.fn.tempname() .. ".ipynb")
+vim.bo[guidebuf].buftype = ""
+vim.bo[guidebuf].shiftwidth, vim.bo[guidebuf].tabstop = 2, 8
+vim.api.nvim_buf_set_lines(guidebuf, 0, -1, false, { "```python3", "def load():", "\tif ready:", "\t\trun()", "```" })
+markdown.enable(guidebuf)
+assert(vim.b[guidebuf].snacks_indent == false, "notebook guides must not overlap Snacks' unshifted extmarks")
+local guide_win = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_cursor(guide_win, { 2, 0 })
+scope_callback(guide_win, guidebuf, { buf = guidebuf, from = 2, to = 4, indent = 0 }, nil)
+provider.on_win(nil, guide_win, guidebuf, 0, 4)
+local shifted = false
+for _, mark in ipairs(guide_marks) do shifted = shifted or (mark.row == 2 and mark.col == 2) end
+assert(shifted, "notebook indent guides must align with the two-column code-cell inset")
+assert(rendered_scope and rendered_scope.state.leftcol == -2,
+  "the top-level function scope must use the same inset as the visible notebook code")
+Snacks.indent.enabled = false
+guide_marks = {}
+provider.on_win(nil, guide_win, guidebuf, 0, 4)
+vim.wait(10)
+assert(#guide_marks == 0, "disabling Snacks guides must also disable notebook guides")
+Snacks.indent.enabled = true
+provider.on_win(nil, guide_win, guidebuf, 0, 4)
+assert(#guide_marks > 0, "re-enabling Snacks guides must retain notebook alignment")
+markdown.disable(guidebuf)
+assert(vim.b[guidebuf].snacks_indent == nil, "disabling notebook rendering must restore the prior Snacks buffer option")
+assert(scope_stopped, "closing the last notebook must stop its scope listener")
+for _, extension in ipairs({ "py", "md" }) do
+  local ordinary_buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(ordinary_buffer, vim.fn.tempname() .. "." .. extension)
+  vim.b[ordinary_buffer].ipynb_markdown_enabled = true
+  require("ipynb.guides").enable(ordinary_buffer)
+  assert(vim.b[ordinary_buffer].snacks_indent == nil, "notebook guide handling must not alter ordinary files")
+  vim.api.nvim_buf_delete(ordinary_buffer, { force = true })
+end
+vim.api.nvim_buf_delete(guidebuf, { force = true })
+vim.api.nvim_buf_delete(pythonbuf, { force = true })
+vim.api.nvim_set_decoration_provider, vim.api.nvim_buf_set_extmark = original_provider, original_extmark
+_G.Snacks = original_snacks
 print("pass: markdown render caching, compact metadata, and re-enable behavior")
 vim.cmd("qa!")

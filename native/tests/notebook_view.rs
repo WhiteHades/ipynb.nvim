@@ -33,6 +33,57 @@ local ok, err = xpcall(function()
   end
   vim.wait(1000)
   local buf = vim.api.nvim_get_current_buf()
+  local indent = require('ipynb.indent')
+  assert(vim.b[buf].ipynb_python_indent_attached, 'notebook Python indent adapter did not attach')
+  local python_options = indent.python_options(buf)
+  assert(python_options.shiftwidth > 0, 'Python settings must use an effective indentation width')
+  local indent_buf = vim.api.nvim_create_buf(false, true)
+  local keeper = require('otter.keeper')
+  local embedded = assert(keeper.rafts[buf].buffers.python)
+  keeper.rafts[indent_buf] = {buffers={python=embedded}}
+  vim.api.nvim_buf_set_lines(indent_buf, 0, -1, false, {
+    '```python', 'def load():', '    if ready:', '        Path("x").mkdir()', '', '```',
+    '', '```python', 'def nested():', '    with open("x") as stream:',
+    '        result = calculate(', '            stream,', '            value,',
+    '        )', '        return result', '```',
+  })
+  vim.bo[indent_buf].filetype = 'markdown'
+  vim.b[indent_buf].notebook_markdown = true
+  vim.bo[indent_buf].shiftwidth, vim.bo[indent_buf].tabstop = 2, 2
+  vim.bo[indent_buf].expandtab = true
+  indent.attach(indent_buf)
+  vim.api.nvim_set_current_buf(indent_buf)
+  vim.api.nvim_win_set_cursor(0, {4, 0})
+  vim.api.nvim_exec_autocmds('CursorMoved', {buffer=indent_buf})
+  assert(vim.bo[indent_buf].shiftwidth == python_options.shiftwidth
+    and vim.bo[indent_buf].tabstop == python_options.tabstop
+    and vim.bo[indent_buf].expandtab == python_options.expandtab,
+    'Python cell indentation did not use the embedded Python settings')
+  local python_indent = require('nvim-treesitter.indent').get_indent
+  assert(python_indent(5) == 8, 'Enter after an 8-space Python statement must retain 8-space indentation')
+  local nested_indents = {python_indent(3), python_indent(4), python_indent(5),
+    python_indent(10), python_indent(11), python_indent(12), python_indent(13),
+    python_indent(14), python_indent(15)}
+  assert(vim.deep_equal(nested_indents, {4, 8, 8, 4, 8, 12, 12, 8, 8}),
+    'if, with, multiline, and return indentation must follow Python syntax: ' .. vim.inspect(nested_indents))
+  local code_win = vim.api.nvim_get_current_win()
+  vim.cmd('vsplit')
+  local prose_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(prose_win, {1, 0})
+  vim.api.nvim_set_current_win(code_win)
+  assert(vim.bo[indent_buf].shiftwidth == python_options.shiftwidth,
+    'switching back to the Python window must restore Python indentation settings')
+  vim.api.nvim_set_current_win(prose_win)
+  assert(vim.bo[indent_buf].shiftwidth == 2,
+    'switching to the prose window must restore Markdown indentation settings')
+  vim.cmd('close')
+  vim.api.nvim_win_set_cursor(0, {1, 0})
+  vim.api.nvim_exec_autocmds('CursorMoved', {buffer=indent_buf})
+  assert(vim.bo[indent_buf].shiftwidth == 2 and vim.bo[indent_buf].tabstop == 2,
+    'prose indentation settings were not restored outside a Python fence')
+  vim.api.nvim_set_current_buf(buf)
+  keeper.rafts[indent_buf] = nil
+  vim.api.nvim_buf_delete(indent_buf, {force=true})
   assert((vim.g.ipynb_test_rpcs.code_spans or 0) == 0, 'opening repeated the preview span conversion')
   result.open_rpcs = vim.g.ipynb_test_rpcs
   local executable = require('ipynb.cells').executable(buf)

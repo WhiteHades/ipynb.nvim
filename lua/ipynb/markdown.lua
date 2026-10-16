@@ -392,6 +392,7 @@ function M.enable(bufnr)
     setup_highlights()
   end
   vim.b[bufnr].ipynb_markdown_enabled = true
+  require("ipynb.guides").enable(bufnr)
   render(bufnr, true)
   metadata_fold(bufnr, true)
   require("ipynb.cell_header").refresh(bufnr)
@@ -418,6 +419,7 @@ function M.disable(bufnr)
     return
   end
 
+  require("ipynb.guides").disable(bufnr)
   clear(bufnr)
   metadata_fold(bufnr, false)
   require("ipynb.cell_header").clear(bufnr)

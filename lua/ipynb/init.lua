@@ -339,6 +339,7 @@ local function activate_notebook_buffer(bufnr)
     end
   end)
   require("ipynb.diagnostics").attach(bufnr)
+  require("ipynb.indent").attach(bufnr)
 
   set_notebook_keymaps(bufnr)
   if M.options.auto_init then ensure_notebook_kernel(bufnr) end
