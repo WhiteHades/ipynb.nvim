@@ -240,7 +240,7 @@ impl Engine {
         }
         let mut request = params.clone();
         request["op"] = json!("jupytext_action");
-        request["action"] = json!(if action == "save" { "sync" } else { action });
+        request["action"] = json!(action);
         request["notebook"] = current;
         if request["source"] == "buffer" {
             request.as_object_mut().unwrap().remove("source");

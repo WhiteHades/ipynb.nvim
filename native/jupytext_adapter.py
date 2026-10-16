@@ -96,16 +96,20 @@ def _pairs(notebook: Any, path: Path, config: Any) -> list[dict[str, Any]]:
     return [{"path": str(_path(name)), "fmt": fmt} for name, fmt in paired_paths(str(path), fmt, formats)]
 
 
-def _result(notebook: Any, path: Path, config: Any, filename: str | None) -> dict[str, Any]:
-    markdown = jupytext.writes(deepcopy(notebook), "md:markdown", config=config)
-    return {
+def _result(
+    notebook: Any, path: Path, config: Any, filename: str | None, *, include_text: bool = True
+) -> dict[str, Any]:
+    result = {
         "notebook": notebook,
-        "text": markdown[:-1] if markdown.endswith("\n") else markdown,
         "metadata": notebook.metadata,
         "pairs": _pairs(notebook, path, config),
         "config": filename,
         "version": jupytext.__version__,
     }
+    if include_text:
+        markdown = jupytext.writes(deepcopy(notebook), "md:markdown", config=config)
+        result["text"] = markdown[:-1] if markdown.endswith("\n") else markdown
+    return result
 
 
 def read_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -314,7 +318,7 @@ def action_request(request: dict[str, Any]) -> dict[str, Any]:
         transformed = _run_pipe(notebook, request.get("command"), fmt, path, update=action == "pipe")
         if action == "pipe":
             notebook = transformed
-    elif action in {"pair", "unpair", "sync"}:
+    elif action in {"pair", "unpair", "sync", "save"}:
         if action in {"pair", "unpair"}:
             spec = "ipynb" if action == "unpair" else request.get("formats")
             if not isinstance(spec, str) or not spec.strip():
@@ -325,7 +329,7 @@ def action_request(request: dict[str, Any]) -> dict[str, Any]:
         ipynb_paths = [pair["path"] for pair in pairs if pair["fmt"]["extension"] == ".ipynb"]
         if ipynb_paths != [str(path)]:
             raise ValueError("pairing must contain exactly the current .ipynb notebook")
-        if action == "sync" and request.get("source") is not None:
+        if action in {"sync", "save"} and request.get("source") is not None:
             source = str(_path(request["source"]))
             selected = next((pair for pair in pairs if pair["path"] == source), None)
             if selected is None:
@@ -345,7 +349,7 @@ def action_request(request: dict[str, Any]) -> dict[str, Any]:
         write_pair(str(path), [pair["fmt"] for pair in pairs], collect)
     else:
         raise ValueError(f"unknown Jupytext action: {action!r}")
-    result = _result(notebook, path, config, filename)
+    result = _result(notebook, path, config, filename, include_text=action != "save")
     result["writes"] = writes
     if action != "pipe":
         result.pop("notebook")

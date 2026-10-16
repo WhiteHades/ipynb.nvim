@@ -532,12 +532,29 @@ fn jupytext_config_pair_sync_and_export_keep_outputs_and_reject_conflicts() -> R
     let read = engine.read(&json!({"path":path}))?;
     assert!(text(&read["text"]).contains("custom="));
     let mut params = json!({"path":path,"buf":1,"text":buffer,"mtime":mtime});
+    engine.cells[0].status = "running";
     let saved = engine.write(&params)?;
+    assert_eq!(text(&saved["text"]), buffer);
+    engine.cells[0].status = "done";
     assert!(std::fs::read_to_string(&script)?.contains("# %%"));
     assert_eq!(
         text(&notebook::read_json(&path)?["cells"][2]["outputs"][0]["text"]),
         "new\n"
     );
+    let notebook = notebook::read_json(&path)?;
+    let sync_plan = engine.converter.call(&json!({
+        "op":"jupytext_action", "path":path, "action":"sync", "source":script,
+        "notebook":notebook
+    }))?;
+    let save_plan = engine.converter.call(&json!({
+        "op":"jupytext_action", "path":path, "action":"save", "source":script,
+        "notebook":notebook
+    }))?;
+    for field in ["metadata", "pairs", "writes", "config", "version"] {
+        assert_eq!(save_plan[field], sync_plan[field], "plan field {field}");
+    }
+    assert!(sync_plan["text"].is_string());
+    assert!(save_plan.get("text").is_none());
     params["mtime"] = saved["mtime"].clone();
 
     let compared = engine.converter.read(&path, Path::new(""))?;
