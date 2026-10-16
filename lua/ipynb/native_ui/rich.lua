@@ -280,18 +280,31 @@ return function(state)
     return result
   end
 
-  local function truncate_lines(lines)
+  local function more_lines_line(count, hint, width)
+    local label = ("󰁅 %d More lines"):format(count)
+    if not hint or hint == "" then return label end
+    local suffix = " [" .. hint .. "]"
+    if vim.fn.strdisplaywidth(label .. suffix) <= width then return label .. suffix end
+    local compact = ("󰁅 %d"):format(count)
+    local compact_hint = "[" .. hint .. "]"
+    local available = width - vim.fn.strdisplaywidth(compact_hint) - 1
+    if available >= vim.fn.strdisplaywidth(compact) then return compact .. " " .. compact_hint end
+    return take_display_width("…" .. compact_hint, width)
+  end
+
+  local function truncate_lines(lines, hint, width)
     local maximum = math.max(1, number(state.options.virt_text_max_lines, 8) - 2)
     if #lines <= maximum then return lines end
+    if type(hint) == "function" then hint = hint() end
     if state.options.virt_text_truncate == "top" and maximum > 2 then
-      local result = { lines[1], ("↑ %d More lines"):format(#lines - maximum) }
+      local result = { lines[1], more_lines_line(#lines - maximum, hint, width) }
       for index = #lines - maximum + 3, #lines do result[#result + 1] = lines[index] end
-      return result
+      return result, 2
     end
     local result = {}
     for index = 1, maximum - 1 do result[#result + 1] = lines[index] end
-    result[#result + 1] = ("󰁅 %d More lines "):format(#lines - maximum + 1)
-    return result
+    result[#result + 1] = more_lines_line(#lines - maximum + 1, hint, width)
+    return result, #result
   end
 
   local function text_lines(segment)
@@ -332,6 +345,7 @@ return function(state)
     local api = M.provider()
     local records = M.image_records(cell, kind)
     local body = {}
+    local more_rows = {}
     local remaining = number(state.options.limit_output_chars, 1000000)
     local image_index = 0
     local inset = virtual and shape.width >= 4 and 1 or 0
@@ -384,7 +398,11 @@ return function(state)
           remaining = math.max(0, remaining - #joined)
         end
         lines = wrap_lines(vim.split(joined, "\n", { plain = true }), content_width)
-        if virtual then lines = truncate_lines(lines) end
+        if virtual then
+          local more_row
+          lines, more_row = truncate_lines(lines, shape.output_toggle_hint, content_width)
+          if more_row then more_rows[#more_rows + 1] = #body + more_row + 1 end
+        end
         vim.list_extend(body, lines)
       end
     end
@@ -406,7 +424,7 @@ return function(state)
         .. (shape.width > 0 and "╯" or "")
     end
     shape.virtual_height = #lines + (virtual and (shape.padding_top or 0) or 0)
-    return lines, records
+    return lines, records, more_rows
   end
 
   local function open_path(path, command)

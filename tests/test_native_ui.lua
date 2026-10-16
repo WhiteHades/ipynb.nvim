@@ -278,9 +278,13 @@ local traceback = cell("done", false)
 traceback.id, traceback.segments = "traceback", nil
 traceback.lines = { "NameError", "Traceback (most recent call last):", "Cell In[2], line 15", "  failing line",
   "frame 5", "frame 6", "frame 7", "frame 8", "last traceback line" }
+local second_traceback = vim.deepcopy(traceback)
+second_traceback.id, second_traceback.begin, second_traceback["end"] = "traceback-2", { 2, 0 }, { 3, 0 }
+vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "print('second trace')", "" })
 local unrelated_mouse_buf = vim.api.nvim_create_buf(false, true)
 vim.keymap.set("n", "<LeftMouse>", function() error("another buffer's mouse handler was used") end,
   { buffer = unrelated_mouse_buf, expr = true })
+vim.keymap.set("n", "zz", "<Plug>(ipynb-toggle-output)", { buffer = buf, desc = "test output toggle" })
 local get_buffer_maps, get_global_maps = vim.api.nvim_buf_get_keymap, vim.api.nvim_get_keymap
 local mapping_scans = 0
 vim.api.nvim_buf_get_keymap = function(...)
@@ -292,20 +296,31 @@ vim.api.nvim_get_keymap = function(...)
   return get_global_maps(...)
 end
 vim.api.nvim_buf_call(unrelated_mouse_buf, function()
-  assert(ui.sync(buf, { traceback }))
+  assert(ui.sync(buf, { traceback, second_traceback }))
   assert(vim.api.nvim_get_current_buf() == unrelated_mouse_buf, "output refresh must preserve the current buffer")
 end)
 vim.api.nvim_buf_get_keymap, vim.api.nvim_get_keymap = get_buffer_maps, get_global_maps
 assert(vim.api.nvim_get_current_buf() == buf, "background output lookup must restore the original buffer")
-assert(mapping_scans == 0, "output click setup must not copy every mapping to find one mouse action")
+assert(mapping_scans == 2, "truncated output must resolve the actual toggle key once per refresh")
 vim.api.nvim_buf_delete(unrelated_mouse_buf, { force = true })
+vim.keymap.del("n", "zz", { buffer = buf })
+vim.keymap.set("n", "xx", "<Plug>(ipynb-toggle-output)")
+vim.keymap.set("n", "xx", "<Nop>", { buffer = buf })
+vim.keymap.set("n", "yy", "<Plug>(ipynb-toggle-output)", { buffer = buf, desc = "test output toggle" })
+ui.refresh(buf)
+vim.keymap.del("n", "xx")
 local trace_mark
 for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces()["ipynb-native-output"], 0, -1, { details = true })) do
   local more_row
   for index, chunks in ipairs(mark[4].virt_lines or {}) do
     local text = {}
     for _, chunk in ipairs(chunks) do text[#text + 1] = chunk[1] end
-    if table.concat(text):find("More lines", 1, true) then more_row = index end
+    local line = table.concat(text)
+    if line:find("More lines", 1, true) then
+      assert(line:find("yy", 1, true) and not line:find("zz", 1, true) and not line:find("xx", 1, true),
+        "More lines must refresh to the currently mapped output toggle key")
+      more_row = index
+    end
   end
   if more_row then trace_mark = { mark = mark, more_row = more_row }; break end
 end
@@ -329,20 +344,42 @@ assert(vim.wait(500, function()
   end
   return false
 end), "clicking More lines must open the full output float")
-local full_output
+local full_output, trace_float
 for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-  if vim.api.nvim_win_get_config(win).relative ~= "" then full_output = vim.api.nvim_win_get_buf(win); break end
+  if vim.api.nvim_win_get_config(win).relative ~= "" then
+    full_output, trace_float = vim.api.nvim_win_get_buf(win), win
+    break
+  end
 end
 assert(full_output, "click must create an output buffer")
 assert(table.concat(vim.api.nvim_buf_get_lines(full_output, 0, -1, false), "\n"):find("last traceback line", 1, true),
   "expanded output must contain the traceback tail")
+assert(vim.api.nvim_get_current_win() == trace_float, "opening output must focus the output view")
+local output_maps = vim.api.nvim_buf_get_keymap(full_output, "n")
+local return_to_source, toggle_output
+for _, map in ipairs(output_maps) do
+  if map.lhs == "q" or map.lhs == "<Esc>" then return_to_source = map.callback end
+  if map.lhs == "yy" then toggle_output = map.callback end
+end
+assert(return_to_source and toggle_output, "output view must map return and the notebook's actual toggle key")
+return_to_source()
+assert(vim.api.nvim_get_current_win() == source_win and vim.api.nvim_win_is_valid(trace_float),
+  "q or Esc must return to the source and keep expanded output open")
+assert(require("ipynb.native").call("IpynbBufLeave", { full_output }) == false
+    and vim.api.nvim_win_is_valid(trace_float),
+  "leaving the output buffer must not collapse its expanded view")
+vim.api.nvim_set_current_win(trace_float)
+require("ipynb.native").call("IpynbToggleOutput")
+assert(vim.api.nvim_get_current_win() == source_win and not vim.api.nvim_win_is_valid(trace_float),
+  "the mapped toggle must collapse expanded output and return to the source")
+assert(output_details(), "collapsing expanded output must restore the inline preview")
 vim.fn.getmousepos = function()
   return { winid = source_win, screenrow = base.row, screencol = 1 }
 end
 click()
 vim.fn.getmousepos = mouse
 assert(preserved_clicks == 1, "ordinary clicks must still reach the previous global mouse handler")
-assert(ui.hide(), "test output float must close before checking scrolled inline output")
+assert(not ui.hide(), "keyboard toggle already closes output before checking scrolled inline output")
 local source_pos = trace_mark.mark[2]
 local virtual_height = #trace_mark.mark[4].virt_lines
 local top_line, top_screen = source_pos + 2, 1 + virtual_height

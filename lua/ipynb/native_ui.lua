@@ -238,8 +238,6 @@ local function refresh(buf, force, cursor_only)
   end
   local selected_id = selected and tostring(selected.id) or nil
   if state.selected_id ~= selected_id then
-    local previous = state.selected_id and state.by_id[state.selected_id] or nil
-    if previous and output.close_float(previous, false) then output.show_virtual(previous, false) end
     if not state.selected_id and selected and view.options.auto_open_output then output.render_float(selected, false) end
     state.selected_id = selected_id
   end
@@ -501,6 +499,7 @@ M.open = output.open
 M.show = output.show
 M.hide = output.hide
 M.toggle = output.toggle
+M.toggle_open = output.toggle_open
 M.image_popup = rich.image_popup
 M.open_browser = rich.open_browser
 M.yank = rich.yank

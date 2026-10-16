@@ -5,6 +5,25 @@ return function(state, rich)
   local current_positions, source_window = state.current_positions, state.source_window
   local output_ns = state.output_ns
   local mouse_maps = {}
+  local function mapped_lhs(buf, plug)
+    local shadowed = {}
+    for _, maps in ipairs({ vim.api.nvim_buf_get_keymap(buf, "n"), vim.api.nvim_get_keymap("n") }) do
+      for _, map in ipairs(maps) do
+        if not shadowed[map.lhs] then
+          shadowed[map.lhs] = true
+          if map.rhs == plug then return map.lhs end
+        end
+      end
+    end
+  end
+
+  local function output_toggle_hint(buf, context)
+    if context and context.output_toggle_hint then return context.output_toggle_hint end
+    local lhs = mapped_lhs(buf, "<Plug>(ipynb-toggle-output)")
+    local hint = lhs and vim.fn.keytrans(lhs) or ":IpynbToggleOutput"
+    if context then context.output_toggle_hint = hint end
+    return hint
+  end
 
   local function active_mouse_map(buf, mode)
     local map = vim.api.nvim_buf_call(buf, function() return vim.fn.maparg("<LeftMouse>", mode, false, true) end)
@@ -109,6 +128,7 @@ return function(state, rich)
     end
     cell.ui.virt_mark = nil
     cell.ui.virt_key = nil
+    cell.ui.virt_more = nil
     cell.ui.mouse_more = nil
   end
 
@@ -190,7 +210,9 @@ return function(state, rich)
     local api = geometry and geometry.api or rich.provider()
     local layout = geometry and geometry.layout or vim.inspect(api.layout_key and api.layout_key() or {})
     local key = table.concat({ cell.revision, state.config_revision, win, anchor.line, width, info.height, layout }, ":")
-    if not force and cell.ui.virt_mark and cell.ui.virt_key == key then
+    local toggle_hint = cell.ui.virt_more and output_toggle_hint(cell.buf, context) or nil
+    local cache_key = key .. ":" .. (toggle_hint or "")
+    if not force and cell.ui.virt_mark and cell.ui.virt_key == cache_key then
       if context and not geometry then
         local after_win = source_window(cell.buf)
         local after = valid_win(after_win) and vim.fn.getwininfo(after_win)[1]
@@ -203,15 +225,20 @@ return function(state, rich)
     end
     -- Provider rendering may process resize or focus events before the next cell.
     if context then context.geometry = nil end
-    local lines = rich.render_body(cell, {
+    local shape = {
       row = anchor.line,
       padding_top = 1,
       width = width,
       height = info.height,
-    }, cell.buf, win, true)
+      output_toggle_hint = function() return output_toggle_hint(cell.buf, context) end,
+    }
+    local lines, _, more_rows = rich.render_body(cell, shape, cell.buf, win, true)
     cell.ui.mouse_more = nil
-    for index, line in ipairs(lines) do
-      if line:find("More lines", 1, true) then cell.ui.mouse_more = { win = win, row = index }; break end
+    cell.ui.virt_more = false
+    if more_rows and more_rows[1] then
+      cell.ui.virt_more = true
+      toggle_hint = context and context.output_toggle_hint or output_toggle_hint(cell.buf, context)
+      cell.ui.mouse_more = { win = win, row = more_rows[1] }
     end
     local virt_lines = { { { string.rep(" ", width), "Normal" } } }
     for index, line in ipairs(lines) do
@@ -224,7 +251,7 @@ return function(state, rich)
     local mark_options = { virt_lines = virt_lines, strict = false }
     if cell.ui.virt_mark then mark_options.id = cell.ui.virt_mark end
     cell.ui.virt_mark = vim.api.nvim_buf_set_extmark(cell.buf, output_ns, anchor.line, 0, mark_options)
-    cell.ui.virt_key = key
+    cell.ui.virt_key = key .. ":" .. (toggle_hint or "")
     for _, record in ipairs(rich.image_records(cell, "virt")) do pcall(record.api.render, record.id) end
     if #rich.image_records(cell, "virt") > 0 then rich.image_canvas(win, true) end
     if api.refresh then pcall(api.refresh) end
@@ -390,10 +417,34 @@ return function(state, rich)
       float = { buf = display_buf, win = win, source_win = source }
       cell.ui.float = float
       set_float_options(win)
-      local hide = function() M.hide(false, cell.id) end
-      vim.keymap.set("n", "q", hide, { buffer = display_buf, silent = true, nowait = true })
-      vim.keymap.set("n", "<Esc>", hide, { buffer = display_buf, silent = true, nowait = true })
+      local leave = function()
+        if valid_win(float.source_win) then pcall(vim.api.nvim_set_current_win, float.source_win) end
+      end
+      vim.keymap.set("n", "q", leave, { buffer = display_buf, silent = true, nowait = true, desc = "return to notebook" })
+      vim.keymap.set("n", "<Esc>", leave,
+        { buffer = display_buf, silent = true, nowait = true, desc = "return to notebook" })
     end
+
+    local toggle_lhs = mapped_lhs(cell.buf, "<Plug>(ipynb-toggle-output)")
+    if cell.ui.float_toggle_lhs and cell.ui.float_toggle_lhs ~= toggle_lhs then
+      pcall(vim.keymap.del, "n", cell.ui.float_toggle_lhs, { buffer = display_buf })
+    end
+    if toggle_lhs and toggle_lhs ~= "q" and toggle_lhs ~= "<Esc>" then
+      vim.keymap.set("n", toggle_lhs, function() M.toggle_open(cell.id) end, {
+        buffer = display_buf, silent = true, nowait = true, desc = "collapse notebook output",
+      })
+    end
+    cell.ui.float_toggle_lhs = toggle_lhs
+    local hide_lhs = mapped_lhs(cell.buf, "<Plug>(ipynb-hide-output)")
+    if cell.ui.float_hide_lhs and cell.ui.float_hide_lhs ~= hide_lhs then
+      pcall(vim.keymap.del, "n", cell.ui.float_hide_lhs, { buffer = display_buf })
+    end
+    if hide_lhs then
+      vim.keymap.set("n", hide_lhs, function() M.hide(true, cell.id) end, {
+        buffer = display_buf, silent = true, nowait = true, desc = "close notebook output",
+      })
+    end
+    cell.ui.float_hide_lhs = hide_lhs
 
     if previous_cursor then
       local last = vim.api.nvim_buf_line_count(display_buf)
@@ -422,8 +473,33 @@ return function(state, rich)
     local existed = cell.ui.float and valid_win(cell.ui.float.win)
     if not existed and behavior == "no_open" then return false end
     cell.ui.hidden = false
+    if not existed then
+      local buffer = state.buffers[cell.buf]
+      for _, candidate in ipairs(buffer and buffer.order or {}) do
+        if candidate.ui.float and valid_win(candidate.ui.float.win) then
+          M.close_float(candidate, true)
+          if not candidate.ui.hidden then M.show_virtual(candidate, true) end
+        end
+      end
+    end
     local focus = existed or behavior == "open_and_enter"
     return M.render_float(cell, focus, true)
+  end
+
+  function M.toggle_open(cell_id)
+    local cell = state.find_cell(cell_id)
+    if not cell then return false end
+    local already_open = cell.ui.float and valid_win(cell.ui.float.win)
+    if not already_open and output_end(cell) == nil then return false end
+    if not already_open and state.options.enter_output_behavior == "no_open" then
+      return false
+    end
+    if already_open then
+      M.close_float(cell, true)
+      if not cell.ui.hidden then M.show_virtual(cell, true) end
+      return true
+    end
+    return M.open(cell_id)
   end
 
   function M.show(cell_id)
@@ -433,7 +509,7 @@ return function(state, rich)
     return M.render_float(cell, false, true)
   end
 
-  function M.hide(explicit, cell_id)
+  function M.hide(explicit, cell_id, leaving_buf)
     local hidden = false
     local target = explicit and state.find_cell(cell_id) or nil
     if target then
@@ -443,7 +519,8 @@ return function(state, rich)
     end
     for _, buffer in pairs(state.buffers) do
       for _, cell in ipairs(buffer.order) do
-        if cell.ui.float and valid_win(cell.ui.float.win) then
+        if cell.ui.float and valid_win(cell.ui.float.win) and (not target or cell.buf == target.buf)
+          and (leaving_buf == nil or cell.buf == leaving_buf) then
           hidden = M.close_float(cell, true) or hidden
           if not cell.ui.hidden then M.show_virtual(cell, true) end
         end

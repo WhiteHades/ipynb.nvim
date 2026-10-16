@@ -166,17 +166,7 @@ local function set_notebook_keymaps(bufnr)
   end
 
   local function open_output()
-    local notebook_buf = vim.api.nvim_get_current_buf()
     vim.cmd("noautocmd IpynbEnterOutput")
-    if vim.api.nvim_get_current_buf() ~= notebook_buf then
-      for _, key in ipairs({ "<localleader>O", "q", "<Esc>" }) do
-        vim.keymap.set("n", key, "<cmd>IpynbHideOutput<cr>", {
-          buffer = true,
-          silent = true,
-          desc = "close notebook output",
-        })
-      end
-    end
   end
 
   local function open_rich_output()
@@ -305,8 +295,10 @@ local function set_notebook_keymaps(bufnr)
   map("n", "<localleader>b", add_code, "add code cell below")
   map("n", "<localleader>m", add_markdown, "add markdown cell below")
   map("n", "<localleader>s", interrupt, "interrupt execution")
-  map("n", "<localleader>o", open_output, "open full output")
-  map("n", "<localleader>O", hide, "close full output")
+  map("n", "<Plug>(ipynb-toggle-output)", open_output, "toggle full output")
+  map("n", "<localleader>o", "<Plug>(ipynb-toggle-output)", "toggle full output")
+  map("n", "<Plug>(ipynb-hide-output)", hide, "close full output")
+  map("n", "<localleader>O", "<Plug>(ipynb-hide-output)", "close full output")
   map("n", "<localleader>x", open_rich_output, "open rich output")
   map("n", "<localleader>i", restart, "restart kernel")
 

@@ -604,7 +604,8 @@ function M.call(name, args, bang)
     return
   end
   if name == "IpynbHideOutput" then return ui().hide(true) end
-  if name == "IpynbBufLeave" then return ui().hide(false) end
+  if name == "IpynbBufLeave" then return ui().hide(false, nil, args and args[1]) end
+  if name == "IpynbToggleOutput" then return ui().toggle_open() end
   if name == "IpynbOnCursorMoved" or name == "IpynbOnWinScrolled" or name == "IpynbUpdateInterface" then
     if ui().refresh then ui().refresh(vim.api.nvim_get_current_buf(), name ~= "IpynbUpdateInterface") end
     return
@@ -628,6 +629,7 @@ function M.register()
     IpynbInit={nargs="*",complete="file"},IpynbDeinit={nargs=0},IpynbInfo={nargs=0},
     IpynbNext={nargs="*"},IpynbPrev={nargs="*"},IpynbGoto={nargs="*"},
     IpynbEnterOutput={nargs=0},IpynbOpenInBrowser={nargs=0},IpynbImagePopup={nargs=0},
+    IpynbToggleOutput={nargs=0},
     IpynbEvaluateArgument={nargs="*"},IpynbEvaluateVisual={nargs="*"},IpynbEvaluateOperator={nargs=0},
     IpynbEvaluateLine={nargs="*"},IpynbReevaluateAll={nargs=0},IpynbReevaluateCell={nargs=0},
     IpynbInterrupt={nargs="*"},IpynbRestart={nargs="*",bang=true},IpynbDelete={nargs=0,bang=true},
@@ -675,8 +677,8 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd({"WinResized","VimResized","BufEnter"},{group=group,callback=function()
     if job and not closing then M.call("IpynbUpdateInterface") end
   end})
-  vim.api.nvim_create_autocmd("BufLeave",{group=group,callback=function()
-    if job and not closing then M.call("IpynbBufLeave") end
+  vim.api.nvim_create_autocmd("BufLeave",{group=group,callback=function(ev)
+    if job and not closing then M.call("IpynbBufLeave",{ev.buf}) end
   end})
   -- Import Jupytext alongside editor startup only when a notebook was requested.
   for _, path in ipairs(vim.fn.argv()) do
