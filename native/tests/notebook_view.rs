@@ -58,12 +58,18 @@ local ok, err = xpcall(function()
   assert(vim.treesitter.query.get('markdown', 'highlights').has_conceal_line,
     'notebook highlighting must not change other Markdown buffers')
   local namespace = vim.api.nvim_get_namespaces()['ipynb-markdown']
-  local function syntax() return vim.fn.execute('syntax list IpyNotebookCodeFence') end
-  result.initial_syntax = syntax()
+  local function fences()
+    local rows = {}
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {details=true})) do
+      if mark[4].conceal == '' then rows[#rows + 1] = mark[2] end
+    end
+    return rows
+  end
+  result.initial_fences = fences()
   local before = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   vim.cmd('syntax clear')
   markdown.enable(buf)
-  result.recovered_syntax = syntax()
+  result.recovered_fences = fences()
   local function geometry()
     markdown.refresh(buf)
     local marks = vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {details=true})
@@ -609,18 +615,13 @@ vim.fn.writefile({vim.json.encode(result)}, vim.env.IPYNB_VIEW_REPORT)
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(observed["error"].is_null(), "{observed}");
-    assert!(
-        observed["initial_syntax"]
-            .as_str()
-            .unwrap()
-            .contains("conceal"),
+    assert_eq!(
+        observed["initial_fences"].as_array().unwrap().len(),
+        6,
         "{observed}"
     );
-    assert!(
-        observed["recovered_syntax"]
-            .as_str()
-            .unwrap()
-            .contains("conceal"),
+    assert_eq!(
+        observed["initial_fences"], observed["recovered_fences"],
         "{observed}"
     );
     assert_eq!(observed["source_unchanged"], true);

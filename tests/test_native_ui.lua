@@ -63,6 +63,19 @@ ui.sync(formatted, {{id = "empty", begin = {1, 0}, ["end"] = {1, 0}}})
 vim.api.nvim_buf_set_lines(formatted, 1, 1, false, {"print(3)"})
 assert(ui.positions(formatted)[1].source == "print(3)",
   "typing into an imported bodyless cell must exclude its closing fence")
+for _, fence in ipairs({"```", "````", "`````"}) do
+  ui.clear(formatted)
+  vim.api.nvim_buf_set_lines(formatted, 0, -1, false, {fence .. "python", "print(3)", fence})
+  ui.sync(formatted, {{id = "last", begin = {1, 0}, ["end"] = {1, 8}}})
+  vim.api.nvim_buf_set_lines(formatted, 1, 2, false, {})
+  local last = ui.positions(formatted)[1]
+  assert(last.source == "" and vim.deep_equal(last.begin, last["end"])
+    and ui.current(formatted, 1, 0).id == "last",
+    "clearing the final cell at EOF must leave an empty selectable cell")
+  vim.api.nvim_buf_set_lines(formatted, 1, 1, false, {"print(4)"})
+  assert(ui.positions(formatted)[1].source == "print(4)" and ui.current(formatted, 2, 0).id == "last",
+    "typing into a cleared cell must exclude its closing fence for " .. fence)
+end
 ui.clear(formatted)
 vim.api.nvim_buf_delete(formatted, { force = true })
 ui.shutdown()

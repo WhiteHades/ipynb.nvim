@@ -69,7 +69,6 @@ local language_names = {
 }
 
 local syntax_groups = {
-  "IpyNotebookCodeFence",
   "IpyNotebookFrontmatterFence",
   "IpyNotebookHeadingMarker",
   "IpyNotebookListMarker",
@@ -132,9 +131,6 @@ local function setup_syntax(bufnr, reveal_fences, force)
     if not integration then
       vim.cmd([[syntax match IpyNotebookHeadingMarker /\v^\s*#+\s+/ conceal]])
       vim.cmd([[syntax match IpyNotebookListMarker /\v^\s*(([-*+])|(\d+[.)]))\s+(\[[ xX-]\]\s+)?/ conceal]])
-    end
-    if not reveal_fences then
-      vim.cmd([[syntax match IpyNotebookCodeFence /\v^\s*```(\w+)?\s*$/ conceal]])
     end
   end)
   vim.b[bufnr].ipynb_markdown_syntax_state = syntax_state
@@ -278,6 +274,7 @@ local function render(bufnr, force_syntax)
   local in_code_block = false
   local fence_row = nil
   local fence_label
+  local fence_ticks
 
   for index, line in ipairs(lines) do
     local row = index - 1
@@ -303,26 +300,32 @@ local function render(bufnr, force_syntax)
       end
     end
 
-    local language = line:match("^```%s*([%w_+-]+)")
+    local ticks, language = line:match("^(```+)%s*([%w_+-]+)")
+    local closing = line:match("^(```+)%s*$")
     local editing_fence = editing and row == cursor_row and line:match("^%s*`+")
     if not in_code_block and language then
       in_code_block = true
       fence_row = row
       fence_label = language_label(language)
+      fence_ticks = ticks
       if not editing_fence and not (active_cell and row >= active_cell.first and row < active_cell.last) then
         vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
           virt_text = border("╭─", "╮", fence_label, width),
+          end_col = #line,
+          conceal = "",
           virt_text_pos = "overlay",
           hl_mode = "combine",
           line_hl_group = "IpyNotebookCodeBlock",
           priority = 300,
         })
       end
-    elseif line:match("^```%s*$") then
+    elseif closing and (not fence_ticks or #closing >= #fence_ticks) then
       local active_fence = active_cell and row >= active_cell.first and row < active_cell.last
       if in_code_block and fence_row ~= nil and not active_fence and not editing_fence then
         vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
           virt_text = border("╰", "╯", "", width),
+          end_col = #line,
+          conceal = "",
           virt_text_pos = "overlay",
           line_hl_group = "IpyNotebookCodeBlock",
           priority = 300,
@@ -330,6 +333,7 @@ local function render(bufnr, force_syntax)
       end
       in_code_block = not in_code_block
       fence_row = nil
+      fence_ticks = in_code_block and closing or nil
     elseif in_code_block and not (active_cell and row >= active_cell.first and row < active_cell.last) then
       vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
         end_row = row + 1,

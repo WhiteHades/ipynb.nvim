@@ -158,6 +158,11 @@ local function source_window(buf)
   return wins and wins[1] or nil
 end
 
+local function closes_fence(line, opening)
+  local closing = line:match("^(```+)%s*$")
+  return opening ~= nil and closing ~= nil and #closing >= #opening
+end
+
 local function contains_cursor(buf, position, first, last)
   if first.line == last.line and first.col == last.col
     and position.line == first.line and position.col == first.col then return true end
@@ -165,8 +170,8 @@ local function contains_cursor(buf, position, first, last)
   local row = position.line
   if row == first.line - 1 or row == last.line + 1 then
     local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
-    return (row == first.line - 1 and line:match("^```%s*[%w_+-]+") ~= nil)
-      or (row == last.line + 1 and line:match("^```%s*$") ~= nil)
+    return (row == first.line - 1 and line:match("^```+%s*[%w_+-]+") ~= nil)
+      or (row == last.line + 1 and line:match("^```+%s*$") ~= nil)
   end
   return false
 end
@@ -290,11 +295,12 @@ function M.sync(buf, cells)
         local begin_pos = normalize_position(incoming.begin)
         local end_pos = normalize_position(incoming["end"])
         local opening = begin_pos.line > 0 and vim.api.nvim_buf_get_lines(buf, begin_pos.line - 1, begin_pos.line, false)[1] or ""
+        local fence = opening:match("^(```+)%s*[%w_+-]+")
         local ending = vim.api.nvim_buf_get_lines(buf, end_pos.line, end_pos.line + 2, false)
         local empty = begin_pos.line == end_pos.line and begin_pos.col == 0 and end_pos.col == 0
-          and (ending[1] or ""):match("^```%s*$") ~= nil
-        local end_fence = begin_pos.col == 0 and opening:match("^```%s*[%w_+-]+") ~= nil
-          and (empty or (end_pos.col == #(ending[1] or "") and (ending[2] or ""):match("^```%s*$") ~= nil))
+          and closes_fence(ending[1] or "", fence)
+        local end_fence = begin_pos.col == 0 and fence ~= nil
+          and (empty or (end_pos.col == #(ending[1] or "") and closes_fence(ending[2] or "", fence)))
         -- Anchor whole cells to their closing fence so linewise paste after EOF expands them.
         if end_fence and not empty then end_pos = { line = end_pos.line + 1, col = 0 } end
         cell = {

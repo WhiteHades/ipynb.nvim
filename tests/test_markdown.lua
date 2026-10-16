@@ -175,11 +175,13 @@ assert(has_decoration(4) and vim.b[buffer].ipynb_markdown_syntax_state == "conce
   "leaving insert mode must restore the normal fence rendering")
 cell_header.refresh = original_header_refresh
 
-vim.api.nvim_buf_call(buffer, function() vim.cmd("syntax clear IpyNotebookCodeFence") end)
+vim.api.nvim_buf_call(buffer, function() vim.cmd("syntax clear") end)
 markdown.enable(buffer)
-local syntax_listing = vim.api.nvim_buf_call(buffer, function() return vim.fn.execute("syntax list IpyNotebookCodeFence") end)
-assert(syntax_listing:find("IpyNotebookCodeFence", 1, true),
-  "enable must recover syntax groups cleared externally even when the render cache is current")
+local concealed_fence = false
+for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, {details=true})) do
+  concealed_fence = concealed_fence or (mark[2] == 2 and mark[4].conceal == "")
+end
+assert(concealed_fence, "enable must restore fence concealment after syntax is cleared externally")
 
 active = { first = 0, last = 0 }
 native_ui.current = function() return { begin = { 0, 0 }, ["end"] = { 0, 0 } } end
@@ -271,6 +273,32 @@ assert(vim.deep_equal(settings("local"), metadata_display), "disabling rendering
 vim.cmd("only")
 vim.wo.foldtext = original_foldtext
 vim.api.nvim_buf_delete(metadata, { force = true })
+local extended = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_set_current_buf(extended)
+vim.api.nvim_buf_set_lines(extended, 0, -1, false, {"````python", "literal = '''", "```", "'''", "````"})
+markdown.enable(extended)
+local literal, closing = false, false
+for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(extended, namespace, 0, -1, {details=true})) do
+  literal = literal or (mark[2] == 2 and mark[4].virt_text_pos == "inline")
+  closing = closing or (mark[2] == 4 and mark[4].virt_text_pos == "overlay")
+end
+assert(literal and closing, "a shorter literal fence must stay inside the surrounding code block")
+assert(vim.fn.synconcealed(3, 1)[1] == 0, "literal backticks inside code must remain visible")
+if #vim.api.nvim_list_uis() > 0 then
+  vim.wo.foldenable = false
+  vim.api.nvim_win_set_cursor(0, {1, 0})
+  vim.cmd("redraw!")
+  local top = vim.fn.screenpos(vim.api.nvim_get_current_win(), 1, 1)
+  local text = ""
+  for col = 1, vim.o.columns do text = text .. vim.fn.screenstring(top.row, col) end
+  assert(text:find("Python", 1, true), "concealing the fence must leave its rendered label visible")
+  local body = vim.fn.screenpos(vim.api.nvim_get_current_win(), 3, 1)
+  text = ""
+  for col = 1, vim.o.columns do text = text .. vim.fn.screenstring(body.row, col) end
+  assert(text:find("```", 1, true), "literal backticks must appear in the terminal grid")
+end
+markdown.disable(extended)
+vim.api.nvim_buf_delete(extended, {force=true})
 if #vim.api.nvim_list_uis() > 0 then
   local colors = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(colors)

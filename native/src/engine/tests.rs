@@ -862,12 +862,29 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         );
         assert_eq!(saved["metadata"]["custom"], "keep");
     }
-    {
+    for (language, fence, target) in ["python", "julia"].into_iter().flat_map(|language| {
+        ["```", "````"]
+            .into_iter()
+            .flat_map(move |fence| (0..3).map(move |target| (language, fence, target)))
+    }) {
         let directory = save_directory()?;
         let path = directory.path().join("emptied.ipynb");
         let mut engine = save_engine()?;
-        let buffer = "```python\nprint(1)\n```\n\n```python\n\n```\n\n```python\n\n```";
-        let mut original = engine.converter.convert(buffer, None)?;
+        let value = "value = \"日本語🙂\"";
+        let bodies = (0..3)
+            .map(|index| if index == target { value } else { "" })
+            .collect::<Vec<_>>();
+        let buffer = bodies
+            .iter()
+            .map(|source| format!("{fence}{language}\n{source}\n{fence}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut original = engine.converter.convert(&buffer, None)?;
+        assert_eq!(
+            original["cells"].as_array().unwrap().len(),
+            3,
+            "{language} {fence} target {target}"
+        );
         original["metadata"]["jupytext"]["cell_metadata_filter"] = json!("-all");
         for (index, cell) in original["cells"]
             .as_array_mut()
@@ -883,10 +900,15 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         }
         notebook::split_lines(&mut original);
         notebook::write_atomic(&path, &original, None)?;
-        engine.import(&json!({"buf":1,"path":path,"lines":buffer.split('\n').collect::<Vec<_>>(),
-            "spans":[{"begin":[1,0],"end":[1,8]},{"begin":[5,0],"end":[5,0]},{"begin":[9,0],"end":[9,0]}]}))?;
-        let edited = buffer.replacen("print(1)\n", "", 1);
-        for (cell, row) in engine.cells.iter_mut().zip([1, 4, 8]) {
+        let spans: Vec<_> = bodies
+            .iter()
+            .enumerate()
+            .map(|(index, source)| json!({"begin":[1+index*4,0],"end":[1+index*4,source.len()]}))
+            .collect();
+        engine.import(&json!({"buf":1,"path":path,"lines":buffer.split('\n').collect::<Vec<_>>(),"spans":spans}))?;
+        let edited = buffer.replacen(&format!("{value}\n"), "", 1);
+        for (index, cell) in engine.cells.iter_mut().enumerate() {
+            let row = 1 + index * 4 - usize::from(index > target);
             cell.begin = [row, 0];
             cell.end = [row, 0];
             cell.source.clear();
@@ -899,7 +921,7 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
                 for key in ["id", "metadata", "execution_count", "outputs"] {
                     assert_eq!(
                         cell[key], original["cells"][index][key],
-                        "cell {index} {key}"
+                        "{language} {fence} target {target}, cell {index} {key}"
                     );
                 }
             }
