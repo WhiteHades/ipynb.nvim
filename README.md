@@ -30,25 +30,33 @@ See [installation details](doc/install.md) for system requirements and image set
 
 ## Use
 
-1. Open `nvim example.ipynb` and use `:Ipynb` for notebook actions.
-2. Save with `:w`; configured synchronous save hooks apply and outputs return on reopening.
-3. Python runs in the nearest project `.venv`, prepared on first execution.
-4. Use `zo` and `zc` for metadata; insert mode exposes the active cell's fences.
+Open `nvim example.ipynb`. Keys use Normal mode unless noted; `<localleader>` defaults to `\`.
+
+| Keys | Action |
+| --- | --- |
+| `<localleader>n` or `:Ipynb` | Open notebook actions. |
+| `<localleader>r` or `Ctrl+Enter` | Run cell. |
+| `<localleader>r` in Visual mode | Run selection. |
+| `Shift+Enter` | Run cell and move to the next code cell. |
+| `<localleader>R` | Run all cells. |
+| `<localleader>a` | Run cell and cells above. |
+| `<localleader>b` | Add code cell below. |
+| `<localleader>m` | Add Markdown cell below. |
+| `<localleader>s` | Interrupt execution. |
+| `<localleader>o` | Open full output. |
+| `<localleader>O` | Close output or image viewer. |
+| `<localleader>x` | Open image or HTML output. |
+| `<localleader>i` | Restart kernel and clear variables. |
+| `q` or `Esc` in output or image viewer | Close the view. |
+| `zo` / `zc` | Open / close metadata. |
+| `i` | Edit cell and fences. |
+| `:w` | Save with configured formatting and linting. |
+
+Existing mappings take precedence. Modified Enter keys depend on your terminal.
 
 See [configuration and saving](doc/ipynb.txt) for settings and standalone environments.
 
 [PyTorch](https://github.com/pytorch/pytorch) can use CUDA in your project kernel; notebook code selects GPU or CPU.
-
-## Editor plugins
-
-| Plugin | Integration |
-| --- | --- |
-| [Snacks quickfile](https://github.com/folke/snacks.nvim) | Preserves notebook highlighting during quickfile startup. |
-| [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) | Uses its configured renderer for notebook prose. |
-| [blink.cmp](https://github.com/saghen/blink.cmp) | Keeps completion menus aligned with the active notebook insert session. |
-| [conform.nvim](https://github.com/stevearc/conform.nvim) | Runs configured synchronous save formatters on code cells. |
-| [nvim-lint](https://github.com/mfussenegger/nvim-lint) | Runs configured linters on save for notebook code cells. |
-| [which-key.nvim](https://github.com/folke/which-key.nvim) | Shows notebook key descriptions in its popup. |
 
 ## Help
 
