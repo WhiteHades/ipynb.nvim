@@ -64,24 +64,32 @@ pub(super) fn positioned_sources(
             bail!("Output position is outside a UTF-8 boundary");
         }
         let offset = line_start + begin[1];
-        insertions.push((offset, *id, format!("{marker_prefix}{id}__")));
+        let fence = line.trim();
+        let empty = begin[1] == 0
+            && fence.len() >= 3
+            && (fence.bytes().all(|byte| byte == b'`') || fence.bytes().all(|byte| byte == b'~'));
+        insertions.push((offset, *id, format!("{marker_prefix}{id}__"), empty));
     }
-    insertions.sort_by_key(|(offset, _, _)| std::cmp::Reverse(*offset));
+    insertions.sort_by_key(|(offset, _, _, _)| std::cmp::Reverse(*offset));
     let marker_bytes = insertions
         .iter()
-        .map(|(_, _, marker)| marker.len())
+        .map(|(_, _, marker, empty)| marker.len() + usize::from(*empty))
         .sum::<usize>();
     let mut marked = String::with_capacity(buffer.len() + marker_bytes);
     let mut cursor = 0;
-    for (offset, _, marker) in insertions.iter().rev() {
+    for (offset, _, marker, empty) in insertions.iter().rev() {
         marked.push_str(&buffer[cursor..*offset]);
         marked.push_str(marker);
+        // A bodyless cell starts at its closing fence; keep that delimiter on its own line.
+        if *empty {
+            marked.push('\n');
+        }
         cursor = *offset;
     }
     marked.push_str(&buffer[cursor..]);
     let marker_ids: HashMap<_, _> = insertions
         .iter()
-        .map(|(_, id, marker)| (marker.as_str(), *id))
+        .map(|(_, id, marker, _)| (marker.as_str(), *id))
         .collect();
     // Let Jupytext locate the spans; source searches also match prose and duplicate cells.
     let converted = converter.convert_at(&marked, None, path)?;

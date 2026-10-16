@@ -529,6 +529,24 @@ local ok, err = xpcall(function()
   assert(not vim.b[saved_buf].ipynb_read_incomplete)
   jupytext.opts.format = format
   vim.cmd('edit!')
+  local before_empty = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
+  local emptied = ui.positions(saved_buf)[1]
+  vim.api.nvim_buf_set_lines(saved_buf, emptied.begin[1], emptied['end'][1] + 1, false, {})
+  assert(ui.positions(saved_buf)[1].source == '', 'deleting the body included its closing fence')
+  assert(#require('ipynb.cells').executable(saved_buf) == 2, 'emptying a cell changed its executable ordinal')
+  vim.cmd('write')
+  vim.cmd('write')
+  local after_empty = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
+  assert(#before_empty.cells == #after_empty.cells, 'emptying a cell lost notebook cells')
+  for index, cell in ipairs(before_empty.cells) do
+    for _, key in ipairs({'id', 'metadata', 'outputs', 'execution_count'}) do
+      assert(vim.deep_equal(cell[key], after_empty.cells[index][key]), 'emptying a cell changed ' .. key)
+    end
+  end
+  assert(table.concat(after_empty.cells[2].source) == '', 'empty source was not saved')
+  vim.cmd('edit!')
+  assert(#require('ipynb.cells').executable(saved_buf) == 2 and ui.positions(saved_buf)[1].source == '',
+    'reopening an emptied cell lost its output anchor')
   local pixels, image_rows = 8, 8
   package.loaded['ipynb.molten_load_image_nvim'] = {image_api={
     from_file=function(_, opts) return opts.id end,

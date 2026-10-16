@@ -12,6 +12,7 @@ pub(super) struct Cell {
     pub(super) begin: [usize; 2],
     pub(super) end: [usize; 2],
     pub(super) source: String,
+    pub(super) notebook_id: Option<String>,
     pub(super) outputs: Vec<Value>,
     pub(super) count: Value,
     pub(super) status: &'static str,
@@ -68,6 +69,11 @@ impl Engine {
             .iter()
             .find(|c| c.buf == buf && c.begin == begin && c.end == end)
             .map(|c| c.id);
+        let notebook_id = self
+            .cells
+            .iter()
+            .find(|c| Some(c.id) == old_id)
+            .and_then(|c| c.notebook_id.clone());
         self.cells.retain(|c| {
             c.buf != buf || !(c.begin < end && begin < c.end) && !(c.begin == begin && c.end == end)
         });
@@ -85,6 +91,7 @@ impl Engine {
             begin,
             end,
             source,
+            notebook_id,
             outputs: vec![],
             count: Value::Null,
             status: "new",

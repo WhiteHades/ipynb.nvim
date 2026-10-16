@@ -107,7 +107,8 @@ local function current_positions(cell)
   local end_pos = extmark_position(cell.buf, cell.ui.end_mark)
   if not begin_pos or not end_pos then return nil end
   if cell.ui.end_fence then
-    end_pos.line = math.max(begin_pos.line, end_pos.line - 1)
+    if end_pos.line <= begin_pos.line then return begin_pos, begin_pos end
+    end_pos.line = end_pos.line - 1
     end_pos.col = #(vim.api.nvim_buf_get_lines(cell.buf, end_pos.line, end_pos.line + 1, false)[1] or "")
   end
   return begin_pos, end_pos
@@ -158,6 +159,8 @@ local function source_window(buf)
 end
 
 local function contains_cursor(buf, position, first, last)
+  if first.line == last.line and first.col == last.col
+    and position.line == first.line and position.col == first.col then return true end
   if position_at_or_before(first, position) and position_before(position, last) then return true end
   local row = position.line
   if row == first.line - 1 or row == last.line + 1 then
@@ -288,10 +291,12 @@ function M.sync(buf, cells)
         local end_pos = normalize_position(incoming["end"])
         local opening = begin_pos.line > 0 and vim.api.nvim_buf_get_lines(buf, begin_pos.line - 1, begin_pos.line, false)[1] or ""
         local ending = vim.api.nvim_buf_get_lines(buf, end_pos.line, end_pos.line + 2, false)
-        local end_fence = begin_pos.col == 0 and end_pos.col == #(ending[1] or "")
-          and opening:match("^```%s*[%w_+-]+") ~= nil and (ending[2] or ""):match("^```%s*$") ~= nil
+        local empty = begin_pos.line == end_pos.line and begin_pos.col == 0 and end_pos.col == 0
+          and (ending[1] or ""):match("^```%s*$") ~= nil
+        local end_fence = begin_pos.col == 0 and opening:match("^```%s*[%w_+-]+") ~= nil
+          and (empty or (end_pos.col == #(ending[1] or "") and (ending[2] or ""):match("^```%s*$") ~= nil))
         -- Anchor whole cells to their closing fence so linewise paste after EOF expands them.
-        if end_fence then end_pos = { line = end_pos.line + 1, col = 0 } end
+        if end_fence and not empty then end_pos = { line = end_pos.line + 1, col = 0 } end
         cell = {
           id = incoming.id,
           buf = buf,

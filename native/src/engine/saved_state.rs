@@ -166,6 +166,7 @@ impl Engine {
                 begin,
                 end,
                 source,
+                notebook_id: None,
                 count,
                 success,
                 outputs,

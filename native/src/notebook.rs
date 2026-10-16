@@ -405,10 +405,10 @@ fn write_file_atomic(
     // The conversion can take long enough for another process to modify the
     // file. Check once more immediately before the replacement.
     check_mtime(&target, expected)?;
-    if let Some(expected_digest) = expected_digest {
-        if !expected_digest.eq_ignore_ascii_case(&file_digest_bytes(&fs::read(&target)?)) {
-            bail!("notebook changed on disk since it was opened");
-        }
+    if let Some(expected_digest) = expected_digest
+        && !expected_digest.eq_ignore_ascii_case(&file_digest_bytes(&fs::read(&target)?))
+    {
+        bail!("notebook changed on disk since it was opened");
     }
     if create_new {
         temporary.persist_noclobber(&target)

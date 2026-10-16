@@ -1,5 +1,11 @@
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h")
 vim.opt.rtp:prepend(root)
+local empty = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(empty, 0, -1, false, {"```python", "```", "", "```python"})
+local spans = require("ipynb.cells").spans(empty)
+assert(#spans == 1 and vim.deep_equal(spans[1], {begin={1,0}, ["end"]={1,0}}),
+  "closed bodyless cells need a zero-width span; an unclosed opener is not a cell")
+vim.api.nvim_buf_delete(empty, {force=true})
 package.preload["ipynb.molten_load_image_nvim"] = function()
   return { image_api = { panel_supported = function() return true end } }
 end

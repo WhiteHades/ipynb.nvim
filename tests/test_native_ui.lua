@@ -52,6 +52,17 @@ assert(preserved[1].begin[1] == 1 and preserved[2].begin[1] == 6,
 assert(preserved[1].source == "print(1)\n# formatted" and preserved[2].source == "print(2)")
 assert(not pcall(ui.with_positions, formatted, function() error("save hook failed") end),
   "save hook errors must still abort saving")
+vim.api.nvim_buf_set_lines(formatted, 1, 3, false, {})
+local empty = ui.positions(formatted)[1]
+assert(empty.source == "" and vim.deep_equal(empty.begin, empty["end"]),
+  "deleting every body line must not include the closing fence in cell source")
+assert(ui.current(formatted, empty.begin[1], 0).id == "format-first",
+  "the closing fence of a bodyless cell must still select its output")
+ui.clear(formatted)
+ui.sync(formatted, {{id = "empty", begin = {1, 0}, ["end"] = {1, 0}}})
+vim.api.nvim_buf_set_lines(formatted, 1, 1, false, {"print(3)"})
+assert(ui.positions(formatted)[1].source == "print(3)",
+  "typing into an imported bodyless cell must exclude its closing fence")
 ui.clear(formatted)
 vim.api.nvim_buf_delete(formatted, { force = true })
 ui.shutdown()

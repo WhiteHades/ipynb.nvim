@@ -14,6 +14,7 @@ fn cell(kernel: &str, source: &str) -> Cell {
         begin: [0, 0],
         end: [0, source.len()],
         source: source.into(),
+        notebook_id: None,
         outputs: vec![],
         count: Value::Null,
         status: "done",
@@ -805,6 +806,14 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
     )?;
     assert_eq!(sources, ["# 日本語\nprint(1)", "print(1)"]);
     assert!(positions.is_empty());
+    let (sources, positions) = super::matching::positioned_sources(
+        &mut positioned.converter,
+        "```python\n```\n\n```python\nprint(2)\n```",
+        &[(1, [1, 0]), (2, [4, 0])],
+        None,
+    )?;
+    assert_eq!(sources, ["", "print(2)"]);
+    assert_eq!(positions, HashMap::from([(1, 0), (2, 1)]));
     for starts in [vec![(1, [1, 3])], vec![(1, [99, 0])], vec![(1, [1, 99])]] {
         assert!(
             super::matching::positioned_sources(&mut positioned.converter, source, &starts, None)
@@ -852,6 +861,49 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
             original["cells"][0]["attachments"]
         );
         assert_eq!(saved["metadata"]["custom"], "keep");
+    }
+    {
+        let directory = save_directory()?;
+        let path = directory.path().join("emptied.ipynb");
+        let mut engine = save_engine()?;
+        let buffer = "```python\nprint(1)\n```\n\n```python\n\n```\n\n```python\n\n```";
+        let mut original = engine.converter.convert(buffer, None)?;
+        original["metadata"]["jupytext"]["cell_metadata_filter"] = json!("-all");
+        for (index, cell) in original["cells"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            cell["id"] = json!(format!("cell-{index}"));
+            cell["metadata"] = json!({"private":index,"tags":[format!("tag-{index}")]});
+            cell["execution_count"] = json!(index + 1);
+            cell["outputs"] =
+                json!([{"output_type":"stream","name":"stdout","text":format!("{index}\n")}]);
+        }
+        notebook::split_lines(&mut original);
+        notebook::write_atomic(&path, &original, None)?;
+        engine.import(&json!({"buf":1,"path":path,"lines":buffer.split('\n').collect::<Vec<_>>(),
+            "spans":[{"begin":[1,0],"end":[1,8]},{"begin":[5,0],"end":[5,0]},{"begin":[9,0],"end":[9,0]}]}))?;
+        let edited = buffer.replacen("print(1)\n", "", 1);
+        for (cell, row) in engine.cells.iter_mut().zip([1, 4, 8]) {
+            cell.begin = [row, 0];
+            cell.end = [row, 0];
+            cell.source.clear();
+        }
+        for _ in 0..2 {
+            engine.write(&json!({"buf":1,"path":path,"text":edited}))?;
+            let saved = notebook::read_json(&path)?;
+            for (index, cell) in saved["cells"].as_array().unwrap().iter().enumerate() {
+                assert_eq!(text(&cell["source"]), "");
+                for key in ["id", "metadata", "execution_count", "outputs"] {
+                    assert_eq!(
+                        cell[key], original["cells"][index][key],
+                        "cell {index} {key}"
+                    );
+                }
+            }
+        }
     }
     {
         let mut engine = save_engine()?;

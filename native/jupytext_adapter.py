@@ -182,7 +182,31 @@ def convert_request(request: dict[str, Any]) -> Any:
         # Classification replaces metadata; output merging also mutates cells.
         source = deepcopy(source) if request.get("existing") is not None else copy(source)
     if request.get("existing") is not None:
-        source = combine_inputs_with_outputs(source, _notebook(request["existing"]), fmt="md:markdown")
+        existing = _notebook(request["existing"])
+        inputs = source
+        source = combine_inputs_with_outputs(inputs, existing, fmt="md:markdown")
+        originals = {cell.get("id"): cell for cell in existing.cells if cell.cell_type == "code"}
+        anchored, reserved = set(), set()
+        ordinal = 0
+        for index, cell in enumerate(inputs.cells):
+            if cell.cell_type != "code":
+                continue
+            identity = request.get("identities", {}).get(str(ordinal))
+            ordinal += 1
+            if identity is None or identity["id"] not in originals:
+                continue
+            if cell.source != identity["source"] or identity["id"] in reserved:
+                raise ValueError("Notebook cell identity does not match its editor position")
+            left, right = copy(inputs), copy(existing)
+            previous = copy(originals[identity["id"]])
+            previous.source = cell.source
+            left.cells, right.cells = [cell], [previous]
+            source.cells[index] = combine_inputs_with_outputs(left, right, fmt="md:markdown").cells[0]
+            anchored.add(index)
+            reserved.add(identity["id"])
+        for index, cell in enumerate(source.cells):
+            if index not in anchored and cell.get("id") in reserved:
+                source.cells[index] = deepcopy(inputs.cells[index])
     if request.get("path"):
         from jupytext.jupytext import drop_text_representation_metadata
 

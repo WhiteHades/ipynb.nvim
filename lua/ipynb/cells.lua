@@ -8,8 +8,11 @@ function M.spans(bufnr)
   for _, node in query:iter_captures(tree:root(), bufnr) do
     local first, _, last, col = node:range()
     local start, finish = first + 1, last - (col == 0 and 2 or 1)
+    local closing = node:child(node:child_count() - 1)
+    local empty = closing and closing:type() == "fenced_code_block_delimiter" and closing:start() == start
+    if empty then finish = start end
     if start <= finish then
-      local line = vim.api.nvim_buf_get_lines(bufnr, finish, finish + 1, false)[1] or ""
+      local line = not empty and vim.api.nvim_buf_get_lines(bufnr, finish, finish + 1, false)[1] or ""
       result[#result + 1] = { begin = { start, 0 }, ["end"] = { finish, #line } }
     end
   end

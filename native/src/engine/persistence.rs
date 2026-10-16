@@ -160,7 +160,26 @@ impl Engine {
             })
             .collect();
         let buffer = text(&params["text"]);
-        let mut notebook = self.converter.convert_at(&buffer, existing, Some(path))?;
+        let buf = params["buf"].as_u64().unwrap_or(0);
+        let starts: Vec<_> = self
+            .cells
+            .iter()
+            .filter(|cell| cell.buf == buf)
+            .map(|cell| (cell.id, cell.begin))
+            .collect();
+        let (sources, positions) = if starts.is_empty() {
+            (Vec::new(), HashMap::new())
+        } else {
+            positioned_sources(&mut self.converter, &buffer, &starts, Some(path))?
+        };
+        let mut bindings = serde_json::Map::new();
+        for cell in self.cells.iter().filter(|cell| cell.buf == buf) {
+            if let (Some(id), Some(index)) = (&cell.notebook_id, positions.get(&cell.id)) {
+                bindings.insert(index.to_string(), json!({"id":id,"source":sources[*index]}));
+            }
+        }
+        let mut notebook = self.converter.call(&json!({"op":"convert","text":buffer,
+            "existing":existing,"path":path,"identities":bindings}))?;
         self.preserve_cell_identity(
             &mut notebook,
             &identities,
@@ -352,10 +371,11 @@ impl Engine {
                 buf,
                 kernel.clone(),
                 [start, 0],
-                [end, lines[end].len()],
+                [end, code.last().unwrap().len()],
                 source,
             )?;
             let cell = self.cells.iter_mut().find(|c| c.id == id).unwrap();
+            cell.notebook_id = nb["id"].as_str().map(str::to_owned);
             cell.outputs = nb["outputs"].as_array().cloned().unwrap_or_default();
             cell.count = nb["execution_count"].clone();
             cell.status = imported_status(&cell.count);
