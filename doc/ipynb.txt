@@ -129,8 +129,9 @@ empty code cell. Save model checkpoints separately from notebook outputs.
 
 The notebook uses normal save events and your existing autosave settings.
 Each code cell runs your configured synchronous BufWritePre hooks in a buffer
-with that cell's language and filename extension. Conform and attached LSP
-formatters use their existing configuration and autoformat settings. A hook
+with that cell's language and filename extension. Hidden language buffers are
+reused for stateless hooks; stateful hooks get fresh buffers. Conform and attached
+LSP formatters use their existing configuration and autoformat settings. A hook
 error aborts the save. Asynchronous hooks that format after saving cannot change a
 notebook that has already been written.
 

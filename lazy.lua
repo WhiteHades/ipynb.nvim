@@ -52,4 +52,13 @@ return {
       if previous then return previous(buf) end
     end
   end },
+  { "nvim-lualine/lualine.nvim", optional = true, opts = function(_, opts)
+    opts.options = opts.options or {}
+    local previous = opts.options.ignore_focus
+    opts.options.ignore_focus = function(win)
+      if vim.w[win].ipynb_editor then return true end
+      if type(previous) == "function" then return previous(win) end
+      return vim.tbl_contains(previous or {}, vim.bo[vim.api.nvim_win_get_buf(win)].filetype)
+    end
+  end },
 }

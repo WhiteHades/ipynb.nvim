@@ -362,22 +362,35 @@ local ok, err = xpcall(function()
   assert(vim.bo[saved_buf].buftype == '' and vim.b[saved_buf].autoformat == nil,
     'notebooks must inherit normal save and autoformat settings')
   local format_calls = 0
+  local format_buffers, python_filetypes = {}, 0
   local save_windows = #vim.api.nvim_list_wins()
   local format_group = vim.api.nvim_create_augroup('NotebookConfiguredFormatter', {})
+  vim.api.nvim_create_autocmd('FileType', {group=format_group, pattern='python', callback=function()
+    python_filetypes = python_filetypes + 1
+  end})
   vim.api.nvim_create_autocmd('BufWritePre', {group=format_group, pattern='*.ipynb', callback=function(event)
     local text = vim.api.nvim_buf_get_lines(event.buf, 0, -1, false)
     vim.api.nvim_buf_set_lines(event.buf, 0, -1, false, text)
   end})
   vim.api.nvim_create_autocmd('BufWritePre', {group=format_group, pattern='*.py', callback=function(event)
     assert(vim.bo[event.buf].filetype == 'python', 'code formatter received the wrong filetype')
-    assert(vim.api.nvim_win_get_config(0).hide == true,
+    local win = vim.api.nvim_get_current_win()
+    assert(vim.api.nvim_win_get_config(win).hide == true and vim.api.nvim_win_get_config(win).focusable == false
+      and vim.w[win].ipynb_editor == true,
       'formatters must not display temporary buffers over the notebook during a save')
     format_calls = format_calls + 1
+    format_buffers[format_calls] = event.buf
     local text = vim.api.nvim_buf_get_lines(event.buf, 0, -1, false)
     for index, line in ipairs(text) do text[index] = line:gsub('print%(  44  %)', 'print(44)') end
     vim.api.nvim_buf_set_lines(event.buf, 0, -1, false, text)
   end})
   local span = require('ipynb.cells').executable(saved_buf)[1]
+  local code_spans = require('ipynb.cells').spans(saved_buf)
+  local longer = code_spans[3]
+  for _, row in ipairs({longer.begin[1] - 1, longer['end'][1] + 1}) do
+    vim.api.nvim_buf_set_text(saved_buf, row, 0, row, 0, {'`'})
+  end
+  vim.api.nvim_buf_set_lines(saved_buf, longer.begin[1], longer['end'][1] + 1, false, {'print(  44  )'})
   vim.api.nvim_buf_set_lines(saved_buf, span['end'][1] + 1, span['end'][1] + 1, false, {'print(  44  )'})
   vim.api.nvim_exec_autocmds('TextChanged', {buffer=saved_buf})
   local position = ui.positions(saved_buf)[1]
@@ -385,10 +398,55 @@ local ok, err = xpcall(function()
   for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(saved_buf, output_ns, 0, -1, {details=true})) do
     assert(mark[2] > position['end'][1], 'paste left output inside the code fence')
   end
+  local notebook_win = vim.api.nvim_get_current_win()
+  local notebook_cursor, notebook_view = vim.api.nvim_win_get_cursor(notebook_win), vim.api.nvim_win_call(notebook_win, vim.fn.winsaveview)
   vim.cmd('write')
   vim.cmd('write')
   assert(format_calls == 4, 'each save must use configured Python save hooks for both code cells')
+  assert(python_filetypes == 2, 'each save must set Python filetype once for its shared formatter buffer')
+  assert(format_buffers[1] == format_buffers[2] and format_buffers[3] == format_buffers[4]
+    and format_buffers[1] ~= format_buffers[3], 'each save must reuse one fresh formatter buffer across its cells')
+  assert(vim.api.nvim_get_current_win() == notebook_win
+    and vim.deep_equal(vim.api.nvim_win_get_cursor(notebook_win), notebook_cursor)
+    and vim.deep_equal(vim.api.nvim_win_call(notebook_win, vim.fn.winsaveview), notebook_view),
+    'saving must preserve the notebook window focus, cursor, and view')
   assert(#vim.api.nvim_list_wins() == save_windows, 'saving must close its hidden formatter windows')
+  local stateful = vim.api.nvim_create_augroup('NotebookStatefulFormatter', {})
+  local once_calls = 0
+  vim.api.nvim_create_autocmd('FileType', {group=stateful, pattern='python', callback=function(event)
+    vim.api.nvim_create_autocmd('BufWritePre', {group=stateful, buffer=event.buf, once=true, callback=function()
+      once_calls = once_calls + 1
+    end})
+  end})
+  vim.cmd('write')
+  assert(once_calls == 2, 'one-shot buffer-local save hooks must run for every cell')
+  vim.api.nvim_clear_autocmds({group=stateful})
+  local variable_calls = 0
+  vim.api.nvim_create_autocmd('BufWritePre', {group=stateful, pattern='*.py', callback=function(event)
+    if vim.b[event.buf].did_format then return end
+    vim.b[event.buf].did_format = true
+    variable_calls = variable_calls + 1
+  end})
+  vim.cmd('write')
+  assert(variable_calls == 2, 'buffer-local formatter state must not skip another cell')
+  vim.api.nvim_del_augroup_by_id(stateful)
+  local focus
+  for _, spec in ipairs(dofile(require('lazy.core.config').plugins['ipynb.nvim'].dir .. '/lazy.lua')) do
+    if spec[1] == 'nvim-lualine/lualine.nvim' then focus = spec.opts end
+  end
+  assert(focus, 'statusline integration missing')
+  local opts = {options={ignore_focus={'markdown'}}}
+  focus(nil, opts)
+  assert(opts.options.ignore_focus(notebook_win), 'statusline integration lost ignored filetypes')
+  opts = {options={ignore_focus=function(win) return win == notebook_win end}}
+  focus(nil, opts)
+  assert(opts.options.ignore_focus(notebook_win), 'statusline integration lost the configured callback')
+  opts = {}
+  focus(nil, opts)
+  assert(not opts.options.ignore_focus(notebook_win), 'normal windows must retain statusline focus')
+  vim.w[notebook_win].ipynb_editor = true
+  assert(opts.options.ignore_focus(notebook_win), 'hidden notebook tools must not take statusline focus')
+  vim.w[notebook_win].ipynb_editor = nil
   if vim.fn.exists('#general_autosave#FocusLost') == 1 then
     local native = require('ipynb.native')
     local request, nested_ok, nested_error = native.request
@@ -418,6 +476,8 @@ local ok, err = xpcall(function()
     'repeated relative-path saves must retain the disk modification guard')
   local saved = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
   assert(table.concat(saved.cells[2].source):find('print(44)', 1, true), 'saved notebook lost pasted source')
+  assert(table.concat(saved.cells[3].source):find('print(44)', 1, true),
+    'configured formatter must process a code cell with a four-backtick fence')
   if vim.fn.exists('#general_autosave#FocusLost') == 1 then
     assert(table.concat(saved.cells[2].source):find('# typed during save', 1, true), 'save lost an in-flight edit')
     assert(table.concat(saved.cells[2].source):find('# autosaved edit', 1, true), 'autosave lost its original edit')
@@ -550,8 +610,14 @@ local ok, err = xpcall(function()
   vim.api.nvim_buf_set_lines(saved_buf, emptied.begin[1], emptied['end'][1] + 1, false, {})
   assert(ui.positions(saved_buf)[1].source == '', 'deleting the body included its closing fence')
   assert(#require('ipynb.cells').executable(saved_buf) == 2, 'emptying a cell changed its executable ordinal')
+  local empty_formatter = vim.api.nvim_create_autocmd('BufWritePre', {pattern='*.py', callback=function(event)
+    for _, line in ipairs(vim.api.nvim_buf_get_lines(event.buf, 0, -1, false)) do
+      assert(not line:match('^```'), 'Python formatter received a closing Markdown fence')
+    end
+  end})
   vim.cmd('write')
   vim.cmd('write')
+  vim.api.nvim_del_autocmd(empty_formatter)
   local after_empty = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
   assert(#before_empty.cells == #after_empty.cells, 'emptying a cell lost notebook cells')
   for index, cell in ipairs(before_empty.cells) do
