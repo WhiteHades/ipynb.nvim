@@ -5,6 +5,7 @@ local images = {}
 local api = {}
 local term
 local backend_initialized = false
+local refresh_pending, clear_pending = false, false
 local image_tmux = require("ipynb.image_tmux")
 local INLINE_WIDTH_FACTOR = 0.50
 local INLINE_HEIGHT_FACTOR = 0.35
@@ -65,7 +66,7 @@ local function positive(value)
   return type(value) == "number" and value > 0 and value < math.huge
 end
 
-local function render_prepared(img)
+local function render_prepared(img, coalesce)
   local info = vim.fn.getwininfo(img.window)[1]
   local floating = vim.api.nvim_win_get_config(img.window).relative ~= ""
   local x, y, bounds
@@ -109,6 +110,8 @@ local function render_prepared(img)
     return
   end
   img.bounds = bounds
+  -- The queued frame will place active images after applying virtual-line changes.
+  if coalesce and img.ipynb_active and refresh_pending then return end
   img.global_state.backend.render(img, x, y, width, height)
   img.rendered_geometry = { x = x, y = y, width = width, height = height }
 end
@@ -170,7 +173,7 @@ api.from_file = function(path, opts)
           end
           return
         end
-        render_prepared(self)
+        render_prepared(self, geometry == nil)
         return
       end
       if covered_by_float(self.window) then self:clear(); return end
@@ -329,7 +332,6 @@ api.clear = function(id)
   end
 end
 
-local refresh_pending, clear_pending = false, false
 api.refresh = function(force)
   if force then clear_pending = true end
   if refresh_pending then return end

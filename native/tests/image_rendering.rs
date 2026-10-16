@@ -66,6 +66,11 @@ end
 vim.schedule = schedule
 assert(#pending == 1, 'scroll events must share one pending image frame, not queue another refresh each')
 local before_scroll, clear_before_scroll = placements, clears
+plot:render(); plot:render()
+assert(placements == before_scroll, 'provider renders must share the already pending image frame')
+plot:render({})
+assert(placements == before_scroll + 1, 'explicit geometry renders must remain immediate')
+before_scroll = placements
 pending[1]()
 assert(placements > before_scroll, 'the next image frame must apply the current placement')
 assert(clears == clear_before_scroll, 'scroll callbacks must not pass their event table as a forced refresh')
