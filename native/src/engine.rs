@@ -127,7 +127,7 @@ impl Engine {
                     .enumerate()
                     .map(|(index, span)| (index as u64, point(&span["begin"])))
                     .collect();
-                let (_, positions) = matching::positioned_sources(
+                let positioned = matching::positioned_sources(
                     &mut self.converter,
                     &text(&params["text"]),
                     &starts,
@@ -137,7 +137,7 @@ impl Engine {
                     spans
                         .iter()
                         .enumerate()
-                        .filter(|(index, _)| positions.contains_key(&(*index as u64)))
+                        .filter(|(index, _)| positioned.positions.contains_key(&(*index as u64)))
                         .map(|(_, span)| span)
                         .collect::<Vec<_>>()
                 ))

@@ -41,12 +41,18 @@ fn same_source(left: &str, right: &str, language: &str, normalized: &Value) -> O
     Some(sources.get(left)? == sources.get(right)?)
 }
 
+#[derive(Debug)]
+pub(super) struct PositionedSources {
+    pub(super) sources: Vec<String>,
+    pub(super) positions: HashMap<u64, usize>,
+}
+
 pub(super) fn positioned_sources(
     converter: &mut Converter,
     buffer: &str,
     starts: &[(u64, [usize; 2])],
     path: Option<&Path>,
-) -> Result<(Vec<String>, HashMap<u64, usize>)> {
+) -> Result<PositionedSources> {
     let marker_prefix = converter.marker_prefix(buffer).to_owned();
     let line_starts: Vec<usize> = std::iter::once(0)
         .chain(buffer.match_indices('\n').map(|(offset, _)| offset + 1))
@@ -125,7 +131,7 @@ pub(super) fn positioned_sources(
         clean.push_str(&source[cursor..]);
         sources.push(clean);
     }
-    Ok((sources, positions))
+    Ok(PositionedSources { sources, positions })
 }
 
 impl Engine {
@@ -135,8 +141,7 @@ impl Engine {
         buf: u64,
         kernel: Option<&str>,
         normalized: &Value,
-        buffer: Option<&str>,
-        path: Option<&Path>,
+        positioned: Option<&PositionedSources>,
     ) -> Result<bool> {
         let mut cells: Vec<_> = self
             .cells
@@ -150,18 +155,8 @@ impl Engine {
         let nb_cells = notebook["cells"]
             .as_array_mut()
             .context("Notebook cells must be an array")?;
-        let (buffer_sources, positions) = match buffer {
-            Some(buffer) => positioned_sources(
-                &mut self.converter,
-                buffer,
-                &cells
-                    .iter()
-                    .map(|cell| (cell.id, cell.begin))
-                    .collect::<Vec<_>>(),
-                path,
-            )?,
-            None => (Vec::new(), HashMap::new()),
-        };
+        let buffer_sources = positioned.map_or(&[][..], |positioned| positioned.sources.as_slice());
+        let positions = positioned.map(|positioned| &positioned.positions);
         let comparison = comparison_sources(&cells, nb_cells, &self.languages);
         let code_cells: Vec<_> = nb_cells
             .iter()
@@ -169,7 +164,8 @@ impl Engine {
             .filter(|(_, cell)| cell["cell_type"] == "code")
             .map(|(index, cell)| (index, text(&cell["source"])))
             .collect();
-        let aligned = buffer_sources.len() == code_cells.len()
+        let aligned = positioned.is_some()
+            && buffer_sources.len() == code_cells.len()
             && buffer_sources
                 .iter()
                 .zip(&code_cells)
@@ -177,7 +173,7 @@ impl Engine {
         let mut assigned = BTreeSet::new();
         let mut matches = Vec::new();
         for cell in &cells {
-            if buffer.is_some() && !positions.contains_key(&cell.id) {
+            if positioned.is_some_and(|positioned| !positioned.positions.contains_key(&cell.id)) {
                 bail!(
                     "No notebook cell at output line {}; file was not changed",
                     cell.begin[0] + 1
@@ -192,7 +188,10 @@ impl Engine {
                 same_source(left, right, language, normalized)
                     .ok_or_else(|| SourceComparison(comparison.0.clone()).into())
             };
-            let positional = positions.get(&cell.id).filter(|_| aligned).copied();
+            let positional = positions
+                .and_then(|positions| positions.get(&cell.id))
+                .filter(|_| aligned)
+                .copied();
             let exact =
                 positional.is_none() && code_cells.iter().any(|(_, source)| source == &cell.source);
             let mut candidates = Vec::new();

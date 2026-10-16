@@ -365,6 +365,20 @@ fn save_engine() -> Result<Engine> {
     )
 }
 
+fn positioned_for(
+    engine: &mut Engine,
+    buf: u64,
+    buffer: &str,
+) -> Result<super::matching::PositionedSources> {
+    let starts: Vec<_> = engine
+        .cells
+        .iter()
+        .filter(|cell| cell.buf == buf)
+        .map(|cell| (cell.id, cell.begin))
+        .collect();
+    super::matching::positioned_sources(&mut engine.converter, buffer, &starts, None)
+}
+
 #[test]
 fn misplaced_jupytext_markdown_recovers_without_losing_source() -> Result<()> {
     let directory = save_directory()?;
@@ -784,7 +798,7 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
     assert!(!collision.contains(&replacement));
     assert_eq!(positioned.converter.marker_prefix(&collision), replacement);
     let source = "```python\n# 日本語\nprint(1)\n```\n\n```python\nprint(1)\n```";
-    let (sources, positions) = super::matching::positioned_sources(
+    let positioned_sources = super::matching::positioned_sources(
         &mut positioned.converter,
         source,
         &[
@@ -796,24 +810,50 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         ],
         None,
     )?;
-    assert_eq!(sources, ["# 日本語\nprint(1)", "print(1)"]);
-    assert_eq!(positions, HashMap::from([(1, 0), (2, 0), (3, 1), (4, 0)]));
-    let (sources, positions) = super::matching::positioned_sources(
+    assert_eq!(
+        positioned_sources.sources,
+        ["# 日本語\nprint(1)", "print(1)"]
+    );
+    assert_eq!(
+        positioned_sources.positions,
+        HashMap::from([(1, 0), (2, 0), (3, 1), (4, 0)])
+    );
+    let reversed = super::matching::positioned_sources(
+        &mut positioned.converter,
+        source,
+        &[
+            (1, [1, 2]),
+            (2, [2, 0]),
+            (4, [2, 0]),
+            (3, [6, 0]),
+            (2, [2, 0]),
+        ],
+        None,
+    )?;
+    assert_eq!(reversed.sources, positioned_sources.sources);
+    assert_eq!(reversed.positions, positioned_sources.positions);
+    let positioned_sources = super::matching::positioned_sources(
         &mut positioned.converter,
         &format!("{source}\n"),
         &[(5, [8, 0])],
         None,
     )?;
-    assert_eq!(sources, ["# 日本語\nprint(1)", "print(1)"]);
-    assert!(positions.is_empty());
-    let (sources, positions) = super::matching::positioned_sources(
+    assert_eq!(
+        positioned_sources.sources,
+        ["# 日本語\nprint(1)", "print(1)"]
+    );
+    assert!(positioned_sources.positions.is_empty());
+    let positioned_sources = super::matching::positioned_sources(
         &mut positioned.converter,
         "```python\n```\n\n```python\nprint(2)\n```",
         &[(1, [1, 0]), (2, [4, 0])],
         None,
     )?;
-    assert_eq!(sources, ["", "print(2)"]);
-    assert_eq!(positions, HashMap::from([(1, 0), (2, 1)]));
+    assert_eq!(positioned_sources.sources, ["", "print(2)"]);
+    assert_eq!(
+        positioned_sources.positions,
+        HashMap::from([(1, 0), (2, 1)])
+    );
     for starts in [vec![(1, [1, 3])], vec![(1, [99, 0])], vec![(1, [1, 99])]] {
         assert!(
             super::matching::positioned_sources(&mut positioned.converter, source, &starts, None)
@@ -960,12 +1000,13 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         let normalized = json!({"python":{"":"","second = 2":"second = 2\n",
         "first = 1 # live":"first = 1\n","first = 1 # disk":"first = 1\n"}});
         let disk = notebook.clone();
+        let positioned = positioned_for(&mut engine, 1, buffer)?;
         let comparison = engine
-            .merge_outputs(&mut notebook, 1, None, &json!({}), Some(buffer), None)
+            .merge_outputs(&mut notebook, 1, None, &json!({}), Some(&positioned))
             .unwrap_err();
         assert!(comparison.downcast_ref::<SourceComparison>().is_some());
         assert_eq!(notebook, disk);
-        assert!(engine.merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer), None)?);
+        assert!(engine.merge_outputs(&mut notebook, 1, None, &normalized, Some(&positioned))?);
         for (index, count) in [(0, 3), (1, 1), (2, 2)] {
             assert_eq!(notebook["cells"][index]["execution_count"], count);
             assert_eq!(
@@ -1000,7 +1041,7 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         {"cell_type":"code","source":"print(1)","outputs":[],"execution_count":2}]});
         let original = notebook.clone();
         let error = engine
-            .merge_outputs(&mut notebook, 1, None, &json!({}), None, None)
+            .merge_outputs(&mut notebook, 1, None, &json!({}), None)
             .unwrap_err();
         assert!(error.to_string().contains("Ambiguous"));
         assert_eq!(notebook, original);
@@ -1008,8 +1049,9 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         engine.cells[0].begin = [5, 0];
         engine.cells[0].source = "print(1) # new".into();
         let normalized = json!({"python":{"print(1)":"print(1)\n","print(1) # new":"print(1)\n"}});
+        let positioned = positioned_for(&mut engine, 1, buffer)?;
         let error = engine
-            .merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer), None)
+            .merge_outputs(&mut notebook, 1, None, &normalized, Some(&positioned))
             .unwrap_err();
         assert!(error.to_string().contains("Ambiguous"));
         assert_eq!(notebook, original);
@@ -1029,8 +1071,9 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         let mut prose_only = json!({"cells":[
         {"cell_type":"code","source":"print(1)","outputs":[],"execution_count":1}]});
         let unchanged = prose_only.clone();
+        let positioned = positioned_for(&mut engine, 1, "print(1)")?;
         let error = engine
-            .merge_outputs(&mut prose_only, 1, None, &json!({}), Some("print(1)"), None)
+            .merge_outputs(&mut prose_only, 1, None, &json!({}), Some(&positioned))
             .unwrap_err();
         assert!(
             error
@@ -1098,7 +1141,8 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         engine.cells[0].count = json!(9);
         let normalized = json!({"python":{"value = 1 # first":"value = 1\n",
         "value = 1 # second":"value = 1\n"}});
-        assert!(engine.merge_outputs(&mut notebook, 1, None, &normalized, Some(buffer), None)?);
+        let positioned = positioned_for(&mut engine, 1, buffer)?;
+        assert!(engine.merge_outputs(&mut notebook, 1, None, &normalized, Some(&positioned))?);
         assert_eq!(notebook["cells"][0]["execution_count"], 9);
         assert_eq!(notebook["cells"][1]["execution_count"], 2);
     }

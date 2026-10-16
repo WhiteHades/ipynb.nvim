@@ -4,7 +4,11 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::{Engine, ReadCache, matching::positioned_sources, point, text};
+use super::{
+    Engine, ReadCache,
+    matching::{PositionedSources, positioned_sources},
+    point, text,
+};
 use crate::notebook;
 
 pub(super) fn imported_status(count: &Value) -> &'static str {
@@ -21,7 +25,7 @@ fn initial_positions(
     notebook: &Value,
     lines: &[String],
     spans: &[Value],
-) -> Option<(Vec<String>, HashMap<u64, usize>)> {
+) -> Option<PositionedSources> {
     let sources: Vec<_> = notebook["cells"]
         .as_array()?
         .iter()
@@ -68,7 +72,7 @@ fn initial_positions(
     if protected || positions.len() != sources.len() {
         return None;
     }
-    Some((sources, positions))
+    Some(PositionedSources { sources, positions })
 }
 
 impl Engine {
@@ -167,15 +171,27 @@ impl Engine {
             .filter(|cell| cell.buf == buf)
             .map(|cell| (cell.id, cell.begin))
             .collect();
-        let (sources, positions) = if starts.is_empty() {
-            (Vec::new(), HashMap::new())
+        let positioned = if starts.is_empty() {
+            None
         } else {
-            positioned_sources(&mut self.converter, &buffer, &starts, Some(path))?
+            Some(positioned_sources(
+                &mut self.converter,
+                &buffer,
+                &starts,
+                Some(path),
+            )?)
         };
         let mut bindings = serde_json::Map::new();
         for cell in self.cells.iter().filter(|cell| cell.buf == buf) {
-            if let (Some(id), Some(index)) = (&cell.notebook_id, positions.get(&cell.id)) {
-                bindings.insert(index.to_string(), json!({"id":id,"source":sources[*index]}));
+            if let (Some(id), Some(positioned), Some(index)) = (
+                &cell.notebook_id,
+                positioned.as_ref(),
+                positioned.as_ref().and_then(|p| p.positions.get(&cell.id)),
+            ) {
+                bindings.insert(
+                    index.to_string(),
+                    json!({"id":id,"source":positioned.sources[*index]}),
+                );
             }
         }
         let mut notebook = self.converter.call(&json!({"op":"convert","text":buffer,
@@ -191,8 +207,7 @@ impl Engine {
             params["buf"].as_u64().unwrap_or(0),
             None,
             &params["normalized"],
-            Some(&buffer),
-            Some(path),
+            positioned.as_ref(),
         )?;
         Ok(notebook)
     }
@@ -220,13 +235,30 @@ impl Engine {
         let buffer = params["lines"]
             .as_array()
             .map(|lines| lines.iter().map(text).collect::<Vec<_>>().join("\n"));
+        let positioned = if let Some(buffer) = buffer.as_deref() {
+            let starts: Vec<_> = self
+                .cells
+                .iter()
+                .filter(|cell| {
+                    cell.buf == params["buf"].as_u64().unwrap_or(0) && cell.kernel == kernel
+                })
+                .map(|cell| (cell.id, cell.begin))
+                .collect();
+            Some(positioned_sources(
+                &mut self.converter,
+                buffer,
+                &starts,
+                Some(path),
+            )?)
+        } else {
+            None
+        };
         let changed = self.merge_outputs(
             &mut notebook,
             params["buf"].as_u64().unwrap_or(0),
             Some(&kernel),
             &params["normalized"],
-            buffer.as_deref(),
-            Some(path),
+            positioned.as_ref(),
         )?;
         if changed || !overwrite {
             let dest = if overwrite {
@@ -292,7 +324,7 @@ impl Engine {
             .map(text)
             .collect();
         let spans = params["spans"].as_array();
-        let (sources, positions) = if let Some(spans) = spans {
+        let positioned = if let Some(spans) = spans {
             let starts: Vec<_> = spans
                 .iter()
                 .enumerate()
@@ -305,15 +337,19 @@ impl Engine {
             .then(|| initial_positions(&notebook, &lines, spans))
             .flatten();
             match initial {
-                Some(positions) => positions,
+                Some(positioned) => positioned,
                 None => positioned_sources(&mut self.converter, &buffer, &starts, Some(path))?,
             }
         } else {
-            (Vec::new(), HashMap::new())
+            super::matching::PositionedSources {
+                sources: Vec::new(),
+                positions: HashMap::new(),
+            }
         };
-        let mut span_rows = vec![None; sources.len()];
+        let mut span_rows = vec![None; positioned.sources.len()];
         for (index, span) in spans.into_iter().flatten().enumerate() {
-            if let Some(row) = positions
+            if let Some(row) = positioned
+                .positions
                 .get(&(index as u64))
                 .and_then(|ordinal| span_rows.get_mut(*ordinal))
             {
@@ -348,7 +384,7 @@ impl Engine {
                     .get(ordinal)
                     .copied()
                     .flatten()
-                    .filter(|_| sources.get(ordinal) == Some(&source))
+                    .filter(|_| positioned.sources.get(ordinal) == Some(&source))
             } else {
                 (offset..lines.len()).find(|&i| {
                     i + code.len() <= lines.len()
@@ -387,7 +423,7 @@ impl Engine {
             .into_iter()
             .flatten()
             .enumerate()
-            .filter(|(index, _)| positions.contains_key(&(*index as u64)))
+            .filter(|(index, _)| positioned.positions.contains_key(&(*index as u64)))
             .map(|(_, span)| span.clone())
             .collect())
     }
