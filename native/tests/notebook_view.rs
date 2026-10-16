@@ -362,6 +362,7 @@ local ok, err = xpcall(function()
   assert(vim.bo[saved_buf].buftype == '' and vim.b[saved_buf].autoformat == nil,
     'notebooks must inherit normal save and autoformat settings')
   local format_calls = 0
+  local save_windows = #vim.api.nvim_list_wins()
   local format_group = vim.api.nvim_create_augroup('NotebookConfiguredFormatter', {})
   vim.api.nvim_create_autocmd('BufWritePre', {group=format_group, pattern='*.ipynb', callback=function(event)
     local text = vim.api.nvim_buf_get_lines(event.buf, 0, -1, false)
@@ -369,6 +370,8 @@ local ok, err = xpcall(function()
   end})
   vim.api.nvim_create_autocmd('BufWritePre', {group=format_group, pattern='*.py', callback=function(event)
     assert(vim.bo[event.buf].filetype == 'python', 'code formatter received the wrong filetype')
+    assert(vim.api.nvim_win_get_config(0).hide == true,
+      'formatters must not display temporary buffers over the notebook during a save')
     format_calls = format_calls + 1
     local text = vim.api.nvim_buf_get_lines(event.buf, 0, -1, false)
     for index, line in ipairs(text) do text[index] = line:gsub('print%(  44  %)', 'print(44)') end
@@ -385,6 +388,7 @@ local ok, err = xpcall(function()
   vim.cmd('write')
   vim.cmd('write')
   assert(format_calls == 4, 'each save must use configured Python save hooks for both code cells')
+  assert(#vim.api.nvim_list_wins() == save_windows, 'saving must close its hidden formatter windows')
   if vim.fn.exists('#general_autosave#FocusLost') == 1 then
     local native = require('ipynb.native')
     local request, nested_ok, nested_error = native.request
@@ -424,6 +428,11 @@ local ok, err = xpcall(function()
   lint.linters_by_ft.python = {'notebook_fixture'}
   lint.linters.notebook_fixture = {
     cmd='cat', stdin=true, args={}, stream='stdout',
+    condition=function()
+      assert(vim.api.nvim_win_get_config(0).hide == true,
+        'linters must not display embedded buffers over the notebook during a save')
+      return true
+    end,
     parser=function(output)
       assert(output:find('print(44)', 1, true), 'configured linter did not receive notebook code')
       return {{lnum=span.begin[1],col=0,severity=vim.diagnostic.severity.WARN,message='configured notebook lint'}}
@@ -479,6 +488,7 @@ local ok, err = xpcall(function()
     error('configured formatter failure')
   end})
   assert(not pcall(vim.cmd, 'write'), 'formatter failure must abort the notebook write')
+  assert(#vim.api.nvim_list_wins() == save_windows, 'formatter failure must close its hidden window')
   assert(table.concat(vim.fn.readfile(relative), '\n') == unchanged, 'failed formatting changed the notebook file')
   vim.api.nvim_del_augroup_by_id(format_group)
   vim.cmd('write') -- A failed formatter must release the save guard.

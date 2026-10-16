@@ -1,5 +1,18 @@
 local M = {}
 
+local function hidden_buffer_call(buf, callback)
+  -- Save hooks can yield and redraw; an autocmd window can then cover the notebook.
+  local win = vim.api.nvim_open_win(buf, false, {
+    relative = "editor", row = 0, col = 0,
+    width = vim.api.nvim_win_get_width(0), height = vim.api.nvim_win_get_height(0),
+    hide = true, noautocmd = true, style = "minimal",
+  })
+  local ok, result = xpcall(function() return vim.api.nvim_win_call(win, callback) end, debug.traceback)
+  if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+  if not ok then error(result, 0) end
+  return result
+end
+
 function M.format(buf)
   local spans = require("ipynb.cells").executable(buf)
   local raft = require("otter.keeper").rafts[buf]
@@ -13,7 +26,7 @@ function M.format(buf)
       local original = vim.api.nvim_buf_get_lines(buf, span.begin[1], span["end"][1] + 1, false)
       local scratch = vim.api.nvim_create_buf(false, true)
       vim.api.nvim_create_autocmd("BufWriteCmd", { buffer = scratch, callback = function() end })
-      local ok, formatted = xpcall(function()
+      local ok, formatted = xpcall(function() return hidden_buffer_call(scratch, function()
         vim.api.nvim_buf_set_name(scratch, vim.api.nvim_buf_get_name(buf) .. ".cell-" .. index .. "." .. extension)
         vim.bo[scratch].buftype = ""
         vim.api.nvim_buf_set_lines(scratch, 0, -1, false, original)
@@ -26,11 +39,9 @@ function M.format(buf)
             vim.lsp.buf_attach_client(scratch, client.id)
           end
         end
-        vim.api.nvim_buf_call(scratch, function()
-          vim.api.nvim_exec_autocmds("BufWritePre", { buffer = scratch, modeline = false })
-        end)
+        vim.api.nvim_exec_autocmds("BufWritePre", { buffer = scratch, modeline = false })
         return vim.api.nvim_buf_get_lines(scratch, 0, -1, false)
-      end, debug.traceback)
+      end) end, debug.traceback)
       vim.api.nvim_buf_delete(scratch, { force = true })
       if not ok then error(formatted) end
       if not vim.deep_equal(original, formatted) then edits[#edits + 1] = { span = span, lines = formatted } end
@@ -49,7 +60,7 @@ function M.lint(buf)
   if not raft or not lint then return end
   local on_disk = OtterConfig.buffers.write_to_disk
   for _, embedded in pairs(raft.buffers) do
-    vim.api.nvim_buf_call(embedded, function()
+    hidden_buffer_call(embedded, function()
       if on_disk then vim.cmd("silent noautocmd write") end
       local names = vim.list_extend({}, lint._resolve_linter_by_ft(vim.bo[embedded].filetype))
       if #names == 0 then vim.list_extend(names, lint.linters_by_ft._ or {}) end
