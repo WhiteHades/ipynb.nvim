@@ -19,7 +19,7 @@ vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
   "# Heading",
   "",
   "```python",
-  "print(1)",
+  "    print(1)",
   "```",
 })
 
@@ -62,6 +62,13 @@ for _, mark in ipairs(first_marks) do
 end
 assert(opening_border and opening_border[1][1]:find("╭", 1, true),
   "cell borders must move with native text even when terminal graphics are available")
+local left_rail
+for _, mark in ipairs(first_marks) do
+  if mark[2] == 3 and mark[4].virt_text_pos == "win_col" then left_rail = mark[4] end
+end
+assert(left_rail and left_rail.virt_text[1][1] == "│" and left_rail.virt_text_win_col == 0
+  and left_rail.priority == 300 and left_rail.hl_mode == "replace",
+  "indented inactive code must keep its left border in window column zero")
 assert(vim.b[buffer].ipynb_markdown_render_tick == first_tick)
 
 markdown.enable(buffer)

@@ -335,6 +335,17 @@ local function render(bufnr, force_syntax)
       fence_row = nil
       fence_ticks = in_code_block and closing or nil
     elseif in_code_block and not (active_cell and row >= active_cell.first and row < active_cell.last) then
+      -- Fixed-column indent guides can paint over the inline rail.
+      if line:match("^%s+") then
+        vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
+          virt_text = { { "│", "IpyNotebookCodeBorder" } },
+          virt_text_pos = "overlay",
+          virt_text_win_col = 0,
+          virt_text_repeat_linebreak = true,
+          hl_mode = "replace",
+          priority = 300,
+        })
+      end
       vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
         end_row = row + 1,
         end_col = 0,
