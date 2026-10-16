@@ -346,6 +346,7 @@ local function activate_notebook_buffer(bufnr)
       otter.activate({ "python" }, true, true)
     end
   end)
+  require("ipynb.diagnostics").attach(bufnr)
 
   set_notebook_keymaps(bufnr)
   if M.options.auto_init then ensure_notebook_kernel(bufnr) end

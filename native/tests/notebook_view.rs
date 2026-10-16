@@ -359,6 +359,89 @@ local ok, err = xpcall(function()
   vim.cmd('cd ' .. vim.fn.fnameescape(directory))
   vim.cmd('edit relative.ipynb')
   local saved_buf = vim.api.nvim_get_current_buf()
+  local keeper = require('otter.keeper')
+  local raft = assert(keeper.rafts[saved_buf])
+  local embedded = raft.buffers.python
+  local namespace = assert(raft.diagnostics_namespaces[embedded])
+  local source_a = vim.api.nvim_create_namespace('ipynb-test-diagnostics-a')
+  local source_b = vim.api.nvim_create_namespace('ipynb-test-diagnostics-b')
+  local function diagnostic(message, col)
+    return {lnum=0, col=col or 0, end_lnum=0, end_col=(col or 0) + 1,
+      severity=vim.diagnostic.severity.ERROR, message=message}
+  end
+  local first = diagnostic('provider a')
+  first.end_lnum = 1
+  vim.diagnostic.set(source_a, embedded, {first})
+  vim.diagnostic.set(source_b, embedded, {diagnostic('provider b')})
+  local function relay()
+    vim.api.nvim_exec_autocmds('DiagnosticChanged', {buffer=embedded,
+      data={diagnostics={diagnostic('latest provider event')}}})
+  end
+  relay()
+  local function parent_messages()
+    local messages = {}
+    for _, item in ipairs(vim.diagnostic.get(saved_buf, {namespace=namespace})) do
+      messages[item.message] = item
+    end
+    return messages
+  end
+  assert(parent_messages()['provider a'] and parent_messages()['provider b'],
+    'Otter relay must preserve diagnostics from every embedded provider')
+  local original_offset = keeper.get_leading_offset
+  keeper.get_leading_offset = function(line) return line == 0 and 2 or 4 end
+  relay()
+  local first_relay = parent_messages()
+  relay()
+  keeper.get_leading_offset = original_offset
+  assert(first_relay['provider a'].col == 2 and first_relay['provider a'].end_col == 5
+    and parent_messages()['provider a'].col == 2 and parent_messages()['provider a'].end_col == 5
+    and vim.diagnostic.get(embedded, {namespace=source_a})[1].col == 0,
+    'diagnostic leading offsets must be restored without accumulating')
+  vim.diagnostic.reset(source_b, embedded)
+  relay()
+  assert(parent_messages()['provider a'] and parent_messages()['provider b'] == nil,
+    'clearing one embedded provider must preserve the other provider diagnostics')
+  vim.diagnostic.reset(source_a, embedded)
+  vim.diagnostic.reset(source_b, embedded)
+  relay()
+  assert(next(parent_messages()) == nil, 'synthetic provider diagnostics must be cleared after the relay check')
+  local refresh, refresh_calls = vim.lsp.diagnostic._refresh, {}
+  vim.lsp.diagnostic._refresh = function(buf, client, only_visible)
+    refresh_calls[#refresh_calls + 1] = {buf=buf, client=client, only_visible=only_visible}
+  end
+  local function notify(buf, method, client)
+    vim.api.nvim_exec_autocmds('LspNotify', {buffer=buf,
+      data={method=method, client_id=client}})
+  end
+  refresh_calls = {}
+  notify(embedded, 'textDocument/didChange', 123)
+  notify(embedded, 'textDocument/didSave', 124)
+  notify(saved_buf, 'textDocument/didChange', 125)
+  local hidden_refreshes = {}
+  for _, call in ipairs(refresh_calls) do
+    if call.only_visible ~= true then hidden_refreshes[#hidden_refreshes + 1] = call end
+  end
+  assert(#hidden_refreshes == 1 and hidden_refreshes[1].buf == embedded and hidden_refreshes[1].client == 123,
+    'hidden embedded didChange must refresh only its notifying LSP client: ' .. vim.inspect(refresh_calls))
+  local list_wins, win_buf = vim.api.nvim_list_wins, vim.api.nvim_win_get_buf
+  vim.api.nvim_list_wins = function() return {vim.api.nvim_get_current_win()} end
+  vim.api.nvim_win_get_buf = function() return embedded end
+  notify(embedded, 'textDocument/didChange', 126)
+  vim.api.nvim_list_wins, vim.api.nvim_win_get_buf = list_wins, win_buf
+  local visible_refreshes = 0
+  for _, call in ipairs(refresh_calls) do if call.only_visible ~= true then visible_refreshes = visible_refreshes + 1 end end
+  assert(visible_refreshes == 1, 'visible embedded buffers must keep Neovim diagnostic refresh behavior: '
+    .. vim.inspect(refresh_calls))
+  vim.lsp.diagnostic._refresh = refresh
+  local sync_raft, sync_calls = keeper.sync_raft, 0
+  keeper.sync_raft = function(buf) assert(buf == saved_buf); sync_calls = sync_calls + 1 end
+  for _, event in ipairs({'TextChanged', 'TextChangedI', 'TextChangedP'}) do
+    vim.api.nvim_exec_autocmds(event, {buffer=saved_buf})
+  end
+  assert(vim.wait(500, function() return sync_calls > 0 end, 5), 'editing must schedule an Otter sync')
+  vim.wait(50)
+  keeper.sync_raft = sync_raft
+  assert(sync_calls == 1, 'multiple edit events must coalesce into one scheduled Otter sync')
   assert(vim.bo[saved_buf].buftype == '' and vim.b[saved_buf].autoformat == nil,
     'notebooks must inherit normal save and autoformat settings')
   local format_calls = 0
@@ -516,6 +599,12 @@ local ok, err = xpcall(function()
   local recovered = require('otter.keeper').rafts[saved_buf]
   assert(recovered and vim.api.nvim_buf_is_loaded(recovered.buffers.python),
     'returning to an unchanged notebook must restore deactivated language tools')
+  local recovered_sync, recovered_sync_calls = keeper.sync_raft, 0
+  keeper.sync_raft = function(buf) assert(buf == saved_buf); recovered_sync_calls = recovered_sync_calls + 1 end
+  vim.api.nvim_exec_autocmds('TextChanged', {buffer=saved_buf})
+  assert(vim.wait(500, function() return recovered_sync_calls > 0 end, 5),
+    'returning to an unchanged notebook must restore edit-triggered Otter sync')
+  keeper.sync_raft = recovered_sync
   vim.treesitter.stop(saved_buf)
   vim.api.nvim_set_current_buf(scratch)
   vim.api.nvim_set_current_buf(saved_buf)
