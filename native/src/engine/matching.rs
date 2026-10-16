@@ -103,7 +103,7 @@ pub(super) fn positioned_sources(
         "text": marked,
         "existing": null,
         "path": path,
-        "cache": false,
+        "cache": "positions",
     }))?;
     let mut sources = Vec::new();
     let mut positions = HashMap::new();

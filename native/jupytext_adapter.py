@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from contextlib import redirect_stdout
 from copy import copy, deepcopy
 from hashlib import sha256
@@ -32,7 +33,7 @@ from jupytext.formats import (
 from jupytext.paired_paths import base_path, find_base_path_and_format, paired_paths
 from jupytext.sync_pairs import write_pair
 
-_convert_cache: tuple[tuple[Any, ...], Any] | None = None
+_convert_cache: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 
 
 def _path(value: Any) -> Path:
@@ -156,8 +157,8 @@ def read_request(request: dict[str, Any]) -> dict[str, Any]:
 
 def convert_request(request: dict[str, Any]) -> Any:
     config = _context(request["path"])[1] if request.get("path") else None
-    global _convert_cache
     cache = request.get("cache") is not False
+    transient = request.get("cache") == "positions"
     text = str(request.get("text", ""))
     key = None
     if cache and len(text) <= 1_000_000:
@@ -174,17 +175,28 @@ def convert_request(request: dict[str, Any]) -> Any:
         except (TypeError, ValueError):
             pass
         else:
-            key = (str(_path(request["path"])) if request.get("path") else None,
+            key = (transient, str(_path(request["path"])) if request.get("path") else None,
                    jupytext.__version__, settings, text)
-    if key is not None and _convert_cache is not None and _convert_cache[0] == key:
-        source = _convert_cache[1]
+    if key is not None and key in _convert_cache:
+        source = _convert_cache[key]
+        _convert_cache.move_to_end(key)
     else:
-        if cache:
-            _convert_cache = None
         source = jupytext.reads(text, fmt="md:markdown", config=config)
         if cache and key is not None and len(source.cells) <= 4096:
-            _convert_cache = (key, source)
-    if _convert_cache is not None and source is _convert_cache[1]:
+            if not transient:
+                for cached_key in list(_convert_cache):
+                    if not cached_key[0]:
+                        del _convert_cache[cached_key]
+            _convert_cache[key] = source
+            while (len(_convert_cache) > 3
+                   or sum(len(entry[-1]) for entry in _convert_cache) > 1_000_000
+                   or sum(len(notebook.cells) for notebook in _convert_cache.values()) > 4096):
+                oldest_transient = next((cached_key for cached_key in _convert_cache if cached_key[0]), None)
+                if oldest_transient is None:
+                    _convert_cache.popitem(last=False)
+                else:
+                    del _convert_cache[oldest_transient]
+    if key is not None and _convert_cache.get(key) is source:
         # Classification replaces metadata; output merging also mutates cells.
         source = deepcopy(source) if request.get("existing") is not None else copy(source)
     if request.get("existing") is not None:

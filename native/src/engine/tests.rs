@@ -487,6 +487,17 @@ fn jupytext_config_pair_sync_and_export_keep_outputs_and_reject_conflicts() -> R
     let source = "# First\n\n# Second\n\n```python\nprint(1)\n```";
     let parsed = engine.converter.convert_at(source, None, Some(&path))?;
     assert_eq!(parsed["cells"].as_array().unwrap().len(), 2);
+    for source in ["```python\nprint(2)\n```", "```python\nprint(3)\n```"] {
+        engine.converter.call(&json!({
+            "op":"convert", "text":source, "existing":null,
+            "path":path, "cache":"positions",
+        }))?;
+    }
+    assert_eq!(
+        engine.converter.convert_at(source, None, Some(&path))?,
+        parsed,
+        "the first parse remains correct after three cache entries"
+    );
     let uncached = engine.converter.call(&json!({
         "op":"convert", "text":"```python\nprint(9)\n```", "existing":null,
         "path":path, "cache":false,
@@ -495,6 +506,28 @@ fn jupytext_config_pair_sync_and_export_keep_outputs_and_reject_conflicts() -> R
     assert_eq!(
         engine.converter.convert_at(source, None, Some(&path))?,
         parsed
+    );
+    let oversized = format!("# {}\n\n```python\nprint(99)\n```", "x".repeat(1_000_001));
+    engine.converter.convert_at(&oversized, None, Some(&path))?;
+    assert_eq!(
+        engine.converter.convert_at(source, None, Some(&path))?,
+        parsed,
+        "an over-budget parse leaves existing cache entries intact"
+    );
+    let large_a = format!("# {}\n\n```python\nprint(4)\n```", "a".repeat(400_000));
+    let large_b = format!("# {}\n\n```python\nprint(5)\n```", "b".repeat(400_000));
+    let large_c = format!("# {}\n\n```python\nprint(6)\n```", "c".repeat(400_000));
+    let first_large_a = engine.converter.convert_at(&large_a, None, Some(&path))?;
+    for text in [&large_b, &large_c] {
+        engine.converter.call(&json!({
+            "op":"convert", "text":text, "existing":null,
+            "path":path, "cache":"positions",
+        }))?;
+    }
+    let retained_large_a = engine.converter.convert_at(&large_a, None, Some(&path))?;
+    assert_eq!(
+        first_large_a["cells"][0]["id"], retained_large_a["cells"][0]["id"],
+        "position-only parses must not evict ordinary notebook input"
     );
     std::fs::write(&config, format!("{settings}split_at_heading = true\n"))?;
     std::fs::File::options()
