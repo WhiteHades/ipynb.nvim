@@ -53,90 +53,28 @@ pub(super) fn positioned_sources(
     starts: &[(u64, [usize; 2])],
     path: Option<&Path>,
 ) -> Result<PositionedSources> {
-    let marker_prefix = converter.marker_prefix(buffer).to_owned();
-    let line_starts: Vec<usize> = std::iter::once(0)
-        .chain(buffer.match_indices('\n').map(|(offset, _)| offset + 1))
-        .collect();
-    let mut insertions = Vec::new();
-    for (id, begin) in starts {
-        let line_start = *line_starts
+    let lines: Vec<_> = buffer.split('\n').collect();
+    for (_, begin) in starts {
+        let line = lines
             .get(begin[0])
             .context("Output position is outside the buffer")?;
-        let line_end = line_starts
-            .get(begin[0] + 1)
-            .map_or(buffer.len(), |next_start| next_start - 1);
-        let line = &buffer[line_start..line_end];
         if !line.is_char_boundary(begin[1]) {
             bail!("Output position is outside a UTF-8 boundary");
         }
-        let offset = line_start + begin[1];
-        let fence = line.trim();
-        let empty = begin[1] == 0
-            && fence.len() >= 3
-            && (fence.bytes().all(|byte| byte == b'`') || fence.bytes().all(|byte| byte == b'~'));
-        insertions.push((offset, *id, format!("{marker_prefix}{id}__"), empty));
     }
-    insertions.sort_by_key(|(offset, _, _, _)| std::cmp::Reverse(*offset));
-    let marker_bytes = insertions
-        .iter()
-        .map(|(_, _, marker, empty)| marker.len() + usize::from(*empty))
-        .sum::<usize>();
-    let mut marked = String::with_capacity(buffer.len() + marker_bytes);
-    let mut cursor = 0;
-    for (offset, _, marker, empty) in insertions.iter().rev() {
-        marked.push_str(&buffer[cursor..*offset]);
-        marked.push_str(marker);
-        // A bodyless cell starts at its closing fence; keep that delimiter on its own line.
-        if *empty {
-            marked.push('\n');
-        }
-        cursor = *offset;
-    }
-    marked.push_str(&buffer[cursor..]);
-    let marker_ids: HashMap<_, _> = insertions
-        .iter()
-        .map(|(_, id, marker, _)| (marker.as_str(), *id))
-        .collect();
-    // Let Jupytext locate the spans; source searches also match prose and duplicate cells.
     let converted = converter.call(&json!({
         "op": "convert",
-        "text": marked,
+        "text": buffer,
         "existing": null,
         "path": path,
         "cache": "positions",
+        "positions": starts,
     }))?;
-    let mut sources = Vec::new();
-    let mut positions = HashMap::new();
-    for cell in converted["cells"]
-        .as_array()
-        .context("Notebook cells must be an array")?
-    {
-        if cell["cell_type"] != "code" {
-            continue;
-        }
-        let source = text(&cell["source"]);
-        let mut clean = String::with_capacity(source.len());
-        let mut cursor = 0;
-        for (start, _) in source.match_indices(&marker_prefix) {
-            let digits = start + marker_prefix.len();
-            let Some(suffix) = source[digits..].find("__") else {
-                continue;
-            };
-            let end = digits + suffix + 2;
-            if let Some(id) = marker_ids.get(&source[start..end]) {
-                if positions
-                    .insert(*id, sources.len())
-                    .is_some_and(|previous| previous != sources.len())
-                {
-                    bail!("Ambiguous notebook output position; file was not changed");
-                }
-                clean.push_str(&source[cursor..start]);
-                cursor = end;
-            }
-        }
-        clean.push_str(&source[cursor..]);
-        sources.push(clean);
-    }
+    let sources = serde_json::from_value(converted["sources"].clone())
+        .context("Notebook sources are required")?;
+    let positions: Vec<(u64, usize)> = serde_json::from_value(converted["positions"].clone())
+        .context("Notebook cell positions are required")?;
+    let positions = positions.into_iter().collect();
     Ok(PositionedSources { sources, positions })
 }
 

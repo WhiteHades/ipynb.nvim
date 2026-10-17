@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import OrderedDict
 from contextlib import redirect_stdout
 from copy import copy, deepcopy
@@ -155,10 +156,49 @@ def read_request(request: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _read_positions(text: str, config: Any) -> tuple[Any, list[tuple[tuple[int, int], tuple[int, int]]]]:
+    from jupytext.jupytext import TextNotebookConverter
+
+    reader = TextNotebookConverter(
+        {"extension": ".md", "format_name": read_format_from_metadata(text, ".md") or "markdown"}, config
+    )
+    implementation = copy(reader.implementation)
+    if implementation.cell_reader_class is None:
+        raise ValueError("Notebook text format does not support editor cell positions")
+    ranges = []
+    points = []
+    row, col = 0, 0
+    for line in text.splitlines(keepends=True):
+        points.append((row, col))
+        if line.endswith("\n"):
+            row, col = row + 1, 0
+        else:
+            col += len(line.encode("utf-8"))
+    line_count = len(points)
+    points.append((row, col))
+
+    class PositionedReader(implementation.cell_reader_class):
+        def read(self, lines):
+            start = line_count - len(lines)
+            cell, consumed = super().read(lines)
+            if cell.cell_type == "code":
+                first = start + int(self.explicit_soc)
+                ranges.append((points[first], points[first + len(self.org_content)]))
+            return cell, consumed
+
+    implementation.cell_reader_class = PositionedReader
+    reader.implementation = implementation
+    notebook = reader.reads(text)
+    if len(ranges) != sum(cell.cell_type == "code" for cell in notebook.cells):
+        raise ValueError("Notebook parser returned inconsistent editor cell positions")
+    return notebook, ranges
+
+
 def convert_request(request: dict[str, Any]) -> Any:
     config = _context(request["path"])[1] if request.get("path") else None
     cache = request.get("cache") is not False
     transient = request.get("cache") == "positions"
+    positioned = "positions" in request
     text = str(request.get("text", ""))
     key = None
     if cache and len(text) <= 1_000_000:
@@ -175,28 +215,45 @@ def convert_request(request: dict[str, Any]) -> Any:
         except (TypeError, ValueError):
             pass
         else:
-            key = (transient, str(_path(request["path"])) if request.get("path") else None,
+            key = (transient, positioned, str(_path(request["path"])) if request.get("path") else None,
                    jupytext.__version__, settings, text)
     if key is not None and key in _convert_cache:
-        source = _convert_cache[key]
+        source, ranges = _convert_cache[key]
         _convert_cache.move_to_end(key)
     else:
-        source = jupytext.reads(text, fmt="md:markdown", config=config)
+        source, ranges = (_read_positions(text, config) if positioned
+                          else (jupytext.reads(text, fmt="md:markdown", config=config), None))
         if cache and key is not None and len(source.cells) <= 4096:
             if not transient:
                 for cached_key in list(_convert_cache):
                     if not cached_key[0]:
                         del _convert_cache[cached_key]
-            _convert_cache[key] = source
+            _convert_cache[key] = source, ranges
             while (len(_convert_cache) > 3
                    or sum(len(entry[-1]) for entry in _convert_cache) > 1_000_000
-                   or sum(len(notebook.cells) for notebook in _convert_cache.values()) > 4096):
+                   or sum(len(entry[0].cells) for entry in _convert_cache.values()) > 4096):
                 oldest_transient = next((cached_key for cached_key in _convert_cache if cached_key[0]), None)
                 if oldest_transient is None:
                     _convert_cache.popitem(last=False)
                 else:
                     del _convert_cache[oldest_transient]
-    if key is not None and _convert_cache.get(key) is source:
+    if positioned:
+        first_points = [first for first, _ in ranges]
+        positions = {}
+        for identity, (row, col) in request["positions"]:
+            point = row, col
+            ordinal = bisect_right(first_points, point) - 1
+            if ordinal < 0:
+                continue
+            first, stop = ranges[ordinal]
+            if point >= stop and not point == first == stop:
+                continue
+            if identity in positions and positions[identity] != ordinal:
+                raise ValueError("Ambiguous notebook output position; file was not changed")
+            positions[identity] = ordinal
+        return {"sources": [cell.source for cell in source.cells if cell.cell_type == "code"],
+                "positions": list(positions.items())}
+    if key is not None and key in _convert_cache and _convert_cache[key][0] is source:
         # Classification replaces metadata; output merging also mutates cells.
         source = deepcopy(source) if request.get("existing") is not None else copy(source)
     if request.get("existing") is not None:

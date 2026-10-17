@@ -779,6 +779,20 @@ local ok, err = xpcall(function()
   jupytext.opts.format = format
   vim.cmd('edit!')
   local before_empty = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
+  local deleting = require('ipynb.cells').executable(saved_buf)[1]
+  assert(deleting['end'][1] > deleting.begin[1], 'line deletion fixture must contain multiple source rows')
+  vim.api.nvim_buf_set_lines(saved_buf, deleting.begin[1], deleting.begin[1] + 1, false, {})
+  vim.cmd('write')
+  vim.cmd('edit!')
+  vim.cmd('write')
+  local after_delete = vim.json.decode(table.concat(vim.fn.readfile(relative), '\n'))
+  assert(#after_delete.cells == #before_empty.cells, 'deleting a source line changed cell count')
+  for index, cell in ipairs(before_empty.cells) do
+    for _, key in ipairs({'id','metadata','outputs','execution_count'}) do
+      assert(vim.deep_equal(cell[key], after_delete.cells[index][key]), 'deletion and reload changed ' .. key)
+    end
+  end
+  before_empty = after_delete
   local emptied = ui.positions(saved_buf)[1]
   vim.api.nvim_buf_set_lines(saved_buf, emptied.begin[1], emptied['end'][1] + 1, false, {})
   assert(ui.positions(saved_buf)[1].source == '', 'deleting the body included its closing fence')

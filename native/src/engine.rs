@@ -236,6 +236,7 @@ impl Engine {
             "preview" => {
                 let mut params = params.clone();
                 params["preview"] = json!(true);
+                params["reset"] = json!(true);
                 Ok(json!(self.import(&params)?))
             }
             "import" => {

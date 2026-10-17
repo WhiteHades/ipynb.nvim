@@ -860,14 +860,117 @@ fn save_duplicate_fixture(engine: &mut Engine, path: &Path) -> Result<(String, V
 }
 
 #[test]
+fn repeated_preview_after_line_deletion_keeps_one_identity() -> Result<()> {
+    let directory = save_directory()?;
+    let path = directory.path().join("line-deletion.ipynb");
+    let mut engine = save_engine()?;
+    let buffer = "```python\nprint(1)\nprint(2)\n```\n\n```python\n\n```";
+    let mut original = engine.converter.convert(buffer, None)?;
+    for cell in original["cells"].as_array_mut().unwrap() {
+        cell["metadata"] = json!({"custom":"kept"});
+        cell["outputs"] = json!([{"output_type":"stream","name":"stdout","text":"kept\n"}]);
+        cell["execution_count"] = json!(7);
+    }
+    notebook::split_lines(&mut original);
+    notebook::write_atomic(&path, &original, None)?;
+    let params = json!({"buf":1,"path":path,"lines":buffer.split('\n').collect::<Vec<_>>(),
+        "spans":[{"begin":[1,0],"end":[2,8]},{"begin":[6,0],"end":[6,0]}]});
+    engine.dispatch("preview", &params)?;
+    engine.cells[0].end = [1, 8];
+    engine.cells[0].source = "print(2)".into();
+    engine.cells[1].begin = [5, 0];
+    engine.cells[1].end = [5, 0];
+    engine.dispatch("preview", &params)?;
+    for _ in 0..2 {
+        engine.write(&json!({"buf":1,"path":path,"text":buffer}))?;
+        assert_eq!(notebook::read_json(&path)?["cells"], original["cells"]);
+    }
+    assert_eq!(engine.cells.len(), 2);
+    engine.cells[0].status = "running";
+    let id = engine.cells[0].id;
+    assert!(engine.dispatch("preview", &params).is_err());
+    assert_eq!(engine.cells[0].id, id);
+    Ok(())
+}
+
+#[test]
+fn cell_positions_preserve_conversion_after_line_deletion() -> Result<()> {
+    let mut engine = save_engine()?;
+    for separator in ['\r', '\u{2028}', '\u{0085}'] {
+        let buffer = format!("```python\nvalue = 'a{separator}b'\n```\n\n```python\nprint(2)\n```");
+        let positioned = super::matching::positioned_sources(
+            &mut engine.converter,
+            &buffer,
+            &[(1, [1, 0]), (2, [5, 0])],
+            None,
+        )?;
+        assert_eq!(positioned.positions, HashMap::from([(1, 0), (2, 1)]));
+        let parsed = engine.converter.convert(&buffer, None)?;
+        assert_eq!(
+            positioned.sources,
+            parsed["cells"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|cell| text(&cell["source"]))
+                .collect::<Vec<_>>()
+        );
+    }
+    for header in [
+        "---\njupyter:\n  jupytext:\n    cell_metadata_filter: '-all'\n---\n\n",
+        "---\njupyter:\n  jupytext:\n    cell_metadata_filter: '-all'\n    comment_magics: true\n---\n\n",
+    ] {
+        for body in [
+            "\nprint(2)",
+            "\n\nprint(2)",
+            "print(2)\n",
+            "",
+            "\n",
+            "# %time print(2)",
+            "!ls",
+            "# comment",
+            "\tprint(2)",
+            "x = '''\n```\n'''",
+            "# %%time",
+        ] {
+            let source = format!("{header}```python\n{body}\n```");
+            let positioned = super::matching::positioned_sources(
+                &mut engine.converter,
+                &source,
+                &[(1, [header.lines().count() + 1, 0])],
+                None,
+            )?;
+            let expected = engine.converter.convert(&source, None)?;
+            assert_eq!(
+                positioned.sources,
+                [text(&expected["cells"][0]["source"])],
+                "{source:?}"
+            );
+            let mut notebook = engine.converter.convert(
+                &format!("{header}```python\nremoved = 1\n{body}\n```"),
+                None,
+            )?;
+            notebook["cells"][0]["metadata"] = json!({"custom":"kept"});
+            notebook["cells"][0]["outputs"] =
+                json!([{"output_type":"stream","name":"stdout","text":"kept\n"}]);
+            notebook["cells"][0]["execution_count"] = json!(7);
+            let identity = notebook["cells"][0]["id"].clone();
+            let merged = engine
+                .converter
+                .call(&json!({"op":"convert", "text":source, "existing":notebook,
+            "identities":{"0":{"id":identity,"source":positioned.sources[0]}}}))?;
+            for key in ["id", "metadata", "outputs", "execution_count"] {
+                assert_eq!(merged["cells"][0][key], notebook["cells"][0][key]);
+            }
+            assert_eq!(merged["cells"][0]["source"], expected["cells"][0]["source"]);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Result<()> {
     let mut positioned = save_engine()?;
-    let prefix = positioned.converter.marker_prefix("").to_owned();
-    let collision = format!("```python\nprint({prefix:?})\n```");
-    let replacement = positioned.converter.marker_prefix(&collision).to_owned();
-    assert_ne!(replacement, prefix);
-    assert!(!collision.contains(&replacement));
-    assert_eq!(positioned.converter.marker_prefix(&collision), replacement);
     let source = "```python\n# 日本語\nprint(1)\n```\n\n```python\nprint(1)\n```";
     let positioned_sources = super::matching::positioned_sources(
         &mut positioned.converter,
@@ -1235,7 +1338,7 @@ fn save_outputs_preserve_identity_and_reject_ambiguous_or_stale_files() -> Resul
         let response = if during_read {
             "printf '%s\\n' '{\"ok\":true,\"result\":{\"notebook\":{\"nbformat\":4,\"cells\":[]}}}'\n".to_owned()
         } else {
-            "marker=$(printf '%s' \"$request\" | sed -n 's/.*\\(__ipynb_[a-f0-9]*_[0-9]*__\\).*/\\1/p')\nprintf '{\"ok\":true,\"result\":{\"cells\":[{\"cell_type\":\"code\",\"source\":\"%sprint(1)\"}]}}\\n' \"$marker\"\n".to_owned()
+            "printf '%s\\n' '{\"ok\":true,\"result\":{\"sources\":[\"print(1)\"],\"positions\":[[1,0]]}}'\n".to_owned()
         };
         let quoted_path = path.to_string_lossy().replace('\'', "'\\''");
         std::fs::write(
