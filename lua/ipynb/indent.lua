@@ -63,8 +63,10 @@ function M.attach(buf)
 
   local function refresh()
     if not vim.api.nvim_buf_is_valid(buf) then return end
-    ranges = python_ranges(buf)
-    current_tick = vim.api.nvim_buf_get_changedtick(buf)
+    local tick = vim.api.nvim_buf_get_changedtick(buf)
+    local edit = vim.b[buf].ipynb_code_edit
+    if not edit or edit.tick ~= tick or current_tick < edit.from_tick then ranges = python_ranges(buf) end
+    current_tick = tick
   end
 
   local function refresh_later()

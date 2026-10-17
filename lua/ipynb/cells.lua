@@ -1,4 +1,63 @@
 local M = {}
+local cache = {}
+
+local function cache_spans(bufnr, spans, tick)
+  if not cache[bufnr] then
+    cache[bufnr] = {}
+    vim.api.nvim_buf_attach(bufnr, false, {
+      on_lines = function(_, changed_buf, changed_tick, first, last, new_last)
+        local state = cache[changed_buf]
+        local spans = state.spans
+        state.spans = nil
+        local previous = vim.b[changed_buf].ipynb_code_edit
+        vim.b[changed_buf].ipynb_code_edit = nil
+        if not spans or changed_tick ~= state.tick + 1 then return end
+        for _, line in ipairs(vim.api.nvim_buf_get_lines(changed_buf, first, new_last, false)) do
+          if line:match("^%s*[`~]") or line:find("<!--", 1, true) or line:find("-->", 1, true)
+            or line:match("#region") or line:match("#endregion") then return end
+        end
+        for index, span in ipairs(spans) do
+          local finish = span["end"][1] - (state.bodyless[index] and 1 or 0)
+          if first >= span.begin[1] and last <= finish + 1 then
+            local delta = new_last - last
+            finish = finish + delta
+            state.bodyless[index] = finish < span.begin[1]
+            local line = not state.bodyless[index]
+              and vim.api.nvim_buf_get_lines(changed_buf, finish, finish + 1, false)[1] or ""
+            span["end"] = { math.max(span.begin[1], finish), #line }
+            for following = index + 1, #spans do
+              spans[following].begin[1] = spans[following].begin[1] + delta
+              spans[following]["end"][1] = spans[following]["end"][1] + delta
+            end
+            if last == first + 1 and new_last == last then
+              local from_tick = previous and previous.tick == state.tick and previous.row == first
+                and previous.from_tick or state.tick
+              local opening = vim.api.nvim_buf_get_lines(changed_buf, span.begin[1] - 1, span.begin[1], false)[1] or ""
+              vim.b[changed_buf].ipynb_code_edit = {
+                from_tick = from_tick, tick = changed_tick, row = first,
+                bordered = opening:match("^```+%s*[%w_+-]+") ~= nil,
+              }
+            end
+            state.spans, state.tick = spans, changed_tick
+            vim.b[changed_buf].ipynb_code_spans = spans
+            vim.b[changed_buf].ipynb_code_spans_tick = changed_tick
+            return
+          end
+        end
+      end,
+      on_detach = function(_, detached_buf)
+        cache[detached_buf] = nil
+      end,
+    })
+  end
+  cache[bufnr].spans, cache[bufnr].tick = vim.deepcopy(spans), tick
+  cache[bufnr].bodyless = {}
+  for index, span in ipairs(spans) do
+    local line = vim.api.nvim_buf_get_lines(bufnr, span["end"][1], span["end"][1] + 1, false)[1] or ""
+    cache[bufnr].bodyless[index] = span.begin[1] == span["end"][1] and span["end"][2] == 0
+      and line:match("^%s*[`~]") ~= nil
+  end
+end
 
 function M.spans(bufnr)
   local parser = vim.treesitter.get_parser(bufnr, "markdown")
@@ -29,12 +88,17 @@ function M.executable(bufnr, force)
       vim.b[bufnr].ipynb_code_spans_tick = tick
     end
   end
-  if not force and vim.b[bufnr].ipynb_code_spans_tick == tick then return vim.b[bufnr].ipynb_code_spans end
+  if not force and vim.b[bufnr].ipynb_code_spans_tick == tick then
+    local spans = vim.b[bufnr].ipynb_code_spans
+    if not cache[bufnr] or cache[bufnr].tick ~= tick or not cache[bufnr].spans then cache_spans(bufnr, spans, tick) end
+    return spans
+  end
   local spans = require("ipynb.native").request("code_spans", {
     path = vim.api.nvim_buf_get_name(bufnr), spans = M.spans(bufnr),
     text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n"),
   })
   vim.b[bufnr].ipynb_code_spans, vim.b[bufnr].ipynb_code_spans_tick = spans, tick
+  cache_spans(bufnr, spans, tick)
   return spans
 end
 

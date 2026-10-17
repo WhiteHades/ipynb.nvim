@@ -89,6 +89,31 @@ local ok, err = xpcall(function()
   local executable = require('ipynb.cells').executable(buf)
   assert(#executable == 2 and #require('ipynb.cells').spans(buf) == 3, 'preview spans include prose code fences')
   assert((vim.g.ipynb_test_rpcs.code_spans or 0) == 0, 'preview spans were not cached')
+  local cell_ranges = require('ipynb.cells')
+  local geometry_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(geometry_buf, vim.fn.tempname() .. '.ipynb')
+  vim.api.nvim_buf_set_lines(geometry_buf, 0, -1, false, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+  vim.b[geometry_buf].ipynb_code_spans = executable
+  vim.b[geometry_buf].ipynb_code_spans_tick = vim.api.nvim_buf_get_changedtick(geometry_buf)
+  cell_ranges.executable(geometry_buf)
+  local function body_edit(first, last, replacement)
+    vim.api.nvim_buf_set_lines(geometry_buf, first, last, false, replacement)
+    local count = vim.g.ipynb_test_rpcs.code_spans or 0
+    local cached = cell_ranges.executable(geometry_buf)
+    assert((vim.g.ipynb_test_rpcs.code_spans or 0) == count, 'body edits repeated notebook conversion')
+    assert(vim.deep_equal(cached, cell_ranges.executable(geometry_buf, true)),
+      'cached body geometry disagrees with Jupytext executable membership')
+  end
+  local body = executable[1].begin[1]
+  body_edit(body, executable[1]['end'][1] + 1, {})
+  body_edit(body, body, {'', 'print(42)'})
+  body_edit(body, body + 1, {'value = 1'})
+  body_edit(body + 1, body + 2, {'print(value)', 'print(42)'})
+  body_edit(body, body + 2, {'value = 1; print(value)'})
+  local following = cell_ranges.executable(geometry_buf)[2].begin[1]
+  body_edit(following, following + 1, {''})
+  body_edit(following, following + 1, {'print(43)'})
+  vim.api.nvim_buf_delete(geometry_buf, {force=true})
   vim.wo.number, vim.wo.relativenumber = true, true
   local function gutter() return {vim.wo.number, vim.wo.relativenumber, vim.wo.statuscolumn} end
   local initial_gutter = gutter()
@@ -236,7 +261,7 @@ local ok, err = xpcall(function()
     vim.api.nvim_exec_autocmds('TextChangedI', {buffer=buf})
     for _ = 1, 3 do require('ipynb.native_ui').refresh(buf) end
     cells.spans = parse
-    insert_visible = insert_visible and parses == 1
+    insert_visible = insert_visible and parses <= 1
     local expanded = false
     for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, namespace, 0, -1, {details=true})) do
       if mark[2] == insert_span['end'][1] + 2 and mark[4].virt_text_pos == 'overlay' then expanded = true end

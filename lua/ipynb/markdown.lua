@@ -173,6 +173,38 @@ local function clear(bufnr)
   vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
 end
 
+local function render_code_line(bufnr, row, line)
+  -- Fixed-column indent guides can paint over the inline rail.
+  if line:match("^%s+") then
+    vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
+      virt_text = { { "│", "IpyNotebookCodeBorder" } },
+      virt_text_pos = "overlay",
+      virt_text_win_col = 0,
+      virt_text_repeat_linebreak = true,
+      hl_mode = "replace",
+      priority = 300,
+    })
+  end
+  vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
+    end_row = row + 1,
+    end_col = 0,
+    hl_group = "IpyNotebookCodeBlock",
+    hl_eol = true,
+    virt_text = { { "│ ", "IpyNotebookCodeBorder" } },
+    virt_text_pos = "inline",
+    virt_text_repeat_linebreak = true,
+    hl_mode = "combine",
+    priority = 0,
+  })
+  vim.api.nvim_buf_set_extmark(bufnr, namespace, row, #line, {
+    -- Keep long source lines visible rather than overlaying a right-hand rail.
+    virt_text = { { " │", "IpyNotebookCodeBorder" } },
+    virt_text_pos = "eol_right_align",
+    hl_mode = "combine",
+    priority = 300,
+  })
+end
+
 function M.foldexpr(original)
   local last = vim.b.ipynb_frontmatter_end
   if last and vim.v.lnum <= last then
@@ -256,6 +288,22 @@ local function render(bufnr, force_syntax)
     pcall(require("ipynb.cells").executable, bufnr)
   end
 
+  local edit = vim.b[bufnr].ipynb_code_edit
+  if not force_syntax and edit and edit.bordered and edit.tick == changedtick
+    and vim.b[bufnr].ipynb_markdown_render_tick
+    and vim.b[bufnr].ipynb_markdown_render_tick >= edit.from_tick
+    and vim.b[bufnr].ipynb_markdown_width == width
+    and vim.b[bufnr].ipynb_markdown_reveal_fences == reveal_fences
+    and vim.b[bufnr].ipynb_markdown_active_cell == active_cell_key then
+    vim.api.nvim_buf_clear_namespace(bufnr, namespace, edit.row, edit.row + 1)
+    if not active_cell or edit.row < active_cell.first or edit.row >= active_cell.last then
+      local line = vim.api.nvim_buf_get_lines(bufnr, edit.row, edit.row + 1, false)[1] or ""
+      render_code_line(bufnr, edit.row, line)
+    end
+    vim.b[bufnr].ipynb_markdown_render_tick = changedtick
+    return
+  end
+
   clear(bufnr)
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -335,35 +383,7 @@ local function render(bufnr, force_syntax)
       fence_row = nil
       fence_ticks = in_code_block and closing or nil
     elseif in_code_block and not (active_cell and row >= active_cell.first and row < active_cell.last) then
-      -- Fixed-column indent guides can paint over the inline rail.
-      if line:match("^%s+") then
-        vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
-          virt_text = { { "│", "IpyNotebookCodeBorder" } },
-          virt_text_pos = "overlay",
-          virt_text_win_col = 0,
-          virt_text_repeat_linebreak = true,
-          hl_mode = "replace",
-          priority = 300,
-        })
-      end
-      vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
-        end_row = row + 1,
-        end_col = 0,
-        hl_group = "IpyNotebookCodeBlock",
-        hl_eol = true,
-        virt_text = { { "│ ", "IpyNotebookCodeBorder" } },
-        virt_text_pos = "inline",
-        virt_text_repeat_linebreak = true,
-        hl_mode = "combine",
-        priority = 0,
-      })
-      vim.api.nvim_buf_set_extmark(bufnr, namespace, row, #line, {
-        -- Keep long source lines visible rather than overlaying a right-hand rail.
-        virt_text = { { " │", "IpyNotebookCodeBorder" } },
-        virt_text_pos = "eol_right_align",
-        hl_mode = "combine",
-        priority = 300,
-      })
+      render_code_line(bufnr, row, line)
     end
   end
   vim.b[bufnr].ipynb_markdown_render_tick = changedtick

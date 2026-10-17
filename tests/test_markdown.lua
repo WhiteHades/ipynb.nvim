@@ -22,6 +22,66 @@ vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
   "    print(1)",
   "```",
 })
+local cells, native = require("ipynb.cells"), require("ipynb.native")
+local request, conversions = native.request, 0
+native.request = function(method)
+  assert(method == "code_spans")
+  conversions = conversions + 1
+  return cells.spans(buffer)
+end
+vim.b[buffer].ipynb_code_spans = cells.spans(buffer)
+vim.b[buffer].ipynb_code_spans_tick = vim.api.nvim_buf_get_changedtick(buffer)
+cells.executable(buffer)
+local original = vim.api.nvim_buf_get_lines(buffer, 3, 4, false)[1]
+for _ = 1, 60 do
+  vim.api.nvim_buf_set_text(buffer, 3, 0, 3, 0, { "a" })
+  assert(cells.executable(buffer)[1]["end"][2] == #original + _, "body edits must update the end byte column")
+end
+assert(conversions == 0, "ordinary code edits must not reconvert the notebook")
+vim.api.nvim_buf_set_text(buffer, 3, 0, 3, 0, { "λ" })
+assert(cells.executable(buffer)[1]["end"][2] == #original + 62, "cached end columns must count UTF-8 bytes")
+vim.api.nvim_buf_set_text(buffer, 3, 0, 3, 2, { "" })
+vim.api.nvim_buf_set_text(buffer, 3, 0, 3, 60, { "" })
+assert(vim.deep_equal(cells.executable(buffer), cells.spans(buffer)), "deletion must keep executable ranges exact")
+vim.api.nvim_buf_set_text(buffer, 2, 3, 2, 9, { "lua" })
+cells.executable(buffer)
+assert(conversions == 1, "editing a fence must invalidate authoritative cell membership")
+cells.executable(buffer, true)
+assert(conversions == 2, "forced execution must still consult the converter")
+vim.api.nvim_buf_set_text(buffer, 2, 3, 2, 6, { "python" })
+cells.executable(buffer)
+native.request = request
+
+local geometry = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(geometry, vim.fn.tempname() .. ".ipynb")
+vim.api.nvim_buf_set_lines(geometry, 0, -1, false, { "```python", "", "```", "```python", "```" })
+local geometry_conversions = 0
+native.request = function()
+  geometry_conversions = geometry_conversions + 1
+  return cells.spans(geometry)
+end
+cells.executable(geometry)
+local function edit_body(first, last, replacement)
+  vim.api.nvim_buf_set_lines(geometry, first, last, false, replacement)
+  assert(vim.deep_equal(cells.executable(geometry), cells.spans(geometry)), "body edits must retain exact cell geometry")
+  assert(geometry_conversions == 1, "empty cells and newlines must retain executable membership")
+end
+edit_body(1, 2, { "x = 1" })
+edit_body(1, 2, { "x = 1", "" })
+edit_body(2, 3, { "y = 2" })
+edit_body(2, 2, { "z = 3" })
+edit_body(1, 4, {})
+edit_body(1, 1, { "first = 1", "second = 2" })
+edit_body(5, 5, { "third = 3" })
+edit_body(5, 6, { "fourth = 4" })
+vim.api.nvim_buf_set_lines(geometry, 7, 7, false, { "outside = 1" })
+cells.executable(geometry)
+assert(geometry_conversions == 2, "insertion after a closing fence must invalidate membership")
+vim.api.nvim_buf_set_lines(geometry, 6, 7, false, { "not a fence" })
+cells.executable(geometry)
+assert(geometry_conversions == 3, "replacing a closing fence must invalidate membership")
+native.request = request
+vim.api.nvim_buf_delete(geometry, { force = true })
 
 local display_options = { "conceallevel", "concealcursor", "foldexpr", "foldtext" }
 local function settings(scope)
@@ -70,6 +130,46 @@ assert(left_rail and left_rail.virt_text[1][1] == "│" and left_rail.virt_text_
   and left_rail.priority == 300 and left_rail.hl_mode == "replace",
   "indented inactive code must keep its left border in window column zero")
 assert(vim.b[buffer].ipynb_markdown_render_tick == first_tick)
+local function surrounding_marks()
+  local marks = {}
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, { details = true })) do
+    if mark[2] ~= 3 then marks[#marks + 1] = mark end
+  end
+  return marks
+end
+local surrounding = surrounding_marks()
+for _ = 1, 12 do
+  vim.api.nvim_buf_set_text(buffer, 3, 0, 3, 0, { "a" })
+  markdown.refresh(buffer)
+  assert(vim.deep_equal(surrounding_marks(), surrounding), "editing code must not rebuild surrounding blocks")
+end
+for _ = 1, 12 do vim.api.nvim_buf_set_text(buffer, 3, 0, 3, 0, { "a" }) end
+markdown.refresh(buffer)
+assert(vim.deep_equal(surrounding_marks(), surrounding), "coalesced key repeats must preserve surrounding blocks")
+vim.api.nvim_buf_set_text(buffer, 3, 0, 3, 24, { "" })
+markdown.refresh(buffer)
+local incremental = vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, { details = true })
+vim.b[buffer].ipynb_markdown_render_tick = nil
+markdown.refresh(buffer)
+local fresh = vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, { details = true })
+for _, marks in ipairs({ incremental, fresh }) do for _, mark in ipairs(marks) do table.remove(mark, 1) end end
+assert(vim.deep_equal(incremental, fresh), "incremental code decoration must match a full render")
+first_marks = vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, { details = true })
+local dialect = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(dialect, vim.fn.tempname() .. ".ipynb")
+vim.api.nvim_buf_set_lines(dialect, 0, -1, false, { "~~~python", "print(1)", "~~~" })
+vim.b[dialect].ipynb_code_spans = cells.spans(dialect)
+vim.b[dialect].ipynb_code_spans_tick = vim.api.nvim_buf_get_changedtick(dialect)
+vim.api.nvim_set_current_buf(dialect)
+markdown.enable(dialect)
+local dialect_marks = vim.api.nvim_buf_get_extmarks(dialect, namespace, 0, -1, { details = true })
+vim.api.nvim_buf_set_text(dialect, 1, 0, 1, 0, { "a" })
+markdown.refresh(dialect)
+assert(vim.deep_equal(dialect_marks, vim.api.nvim_buf_get_extmarks(dialect, namespace, 0, -1, { details = true })),
+  "editing alternative fences must retain the full renderer's style")
+markdown.disable(dialect)
+vim.api.nvim_set_current_buf(buffer)
+vim.api.nvim_buf_delete(dialect, { force = true })
 
 markdown.enable(buffer)
 local unchanged_marks = vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, { details = true })
@@ -84,6 +184,15 @@ assert(not vim.deep_equal(changed_marks, first_marks), "changed buffers should b
 local lines = {
   "```python", "first = 1", "```", "", "```python", "second = 2", "```",
 }
+vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
+vim.b[buffer].ipynb_code_spans = cells.spans(buffer)
+vim.b[buffer].ipynb_code_spans_tick = vim.api.nvim_buf_get_changedtick(buffer)
+markdown.refresh(buffer)
+local rendered_tick = vim.b[buffer].ipynb_markdown_render_tick
+vim.api.nvim_buf_set_text(buffer, 1, 0, 1, 0, { "a" })
+vim.api.nvim_buf_set_text(buffer, 5, 0, 5, 0, { "b" })
+assert(vim.b[buffer].ipynb_code_edit.from_tick > rendered_tick, "edits to different rows must end the narrow refresh run")
+markdown.refresh(buffer)
 vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
 markdown.refresh(buffer)
 local cells = require("ipynb.cells")

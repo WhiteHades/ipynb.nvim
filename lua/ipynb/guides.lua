@@ -20,6 +20,12 @@ local function code_rows(buf)
   local tick = vim.api.nvim_buf_get_changedtick(buf)
   local cached = buffers[buf].rows
   if cached and cached.tick == tick then return cached end
+  local edit = vim.b[buf].ipynb_code_edit
+  if cached and edit and edit.tick == tick and cached.tick >= edit.from_tick then
+    cached.lines[edit.row + 1] = vim.api.nvim_buf_get_lines(buf, edit.row, edit.row + 1, false)[1] or ""
+    cached.tick = tick
+    return cached
+  end
 
   local rows, languages, lines, fence = {}, {}, vim.api.nvim_buf_get_lines(buf, 0, -1, false), nil
   for row, line in ipairs(lines) do
