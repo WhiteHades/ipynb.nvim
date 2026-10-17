@@ -166,7 +166,7 @@ local function set_notebook_keymaps(bufnr)
   end
 
   local function open_output()
-    vim.cmd("noautocmd IpynbEnterOutput")
+    vim.cmd("noautocmd IpynbToggleOutput")
   end
 
   local function open_rich_output()

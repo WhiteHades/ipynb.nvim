@@ -288,7 +288,15 @@ local ok, err = xpcall(function()
   result.output = vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces()['ipynb-native-output'], 0, -1, {details=true})
   vim.cmd('IpynbEnterOutput')
   result.output_opened = vim.api.nvim_get_current_buf() ~= buf
-  if result.output_opened then vim.cmd('IpynbHideOutput') end
+  if result.output_opened then
+    vim.fn.maparg('q', 'n', false, true).callback()
+    assert(vim.api.nvim_get_current_buf() == buf, 'q must return to the notebook')
+    vim.cmd([[normal \o]])
+    assert(vim.api.nvim_get_current_buf() == buf, 'the source output key must collapse after q, not reopen a float')
+    vim.cmd([[normal \o]])
+    assert(vim.api.nvim_get_current_buf() ~= buf, 'the source output key must expand the collapsed preview')
+    vim.cmd('IpynbHideOutput')
+  end
   vim.api.nvim_win_set_cursor(0, {span['end'][1] + 2, 0})
   vim.cmd('IpynbEnterOutput')
   result.bottom_opened = vim.api.nvim_get_current_buf() ~= buf

@@ -137,6 +137,9 @@ return function(state, rich)
     local float = cell.ui.float
     if not float then return false end
     local was_current = valid_win(float.win) and vim.api.nvim_get_current_win() == float.win
+    if valid_win(float.win) then
+      cell.ui.float_view = vim.api.nvim_win_call(float.win, vim.fn.winsaveview)
+    end
     if valid_win(float.win) then pcall(vim.api.nvim_win_close, float.win, true) end
     if valid_buf(float.buf) then pcall(vim.api.nvim_buf_delete, float.buf, { force = true }) end
     if cell.ui.reserve_mark and valid_buf(cell.buf) then
@@ -209,7 +212,8 @@ return function(state, rich)
     anchor.line = math.max(0, math.min(anchor.line, math.max(0, count - 1)))
     local api = geometry and geometry.api or rich.provider()
     local layout = geometry and geometry.layout or vim.inspect(api.layout_key and api.layout_key() or {})
-    local key = table.concat({ cell.revision, state.config_revision, win, anchor.line, width, info.height, layout }, ":")
+    local key = table.concat({ cell.revision, state.config_revision, win, anchor.line, width, info.height,
+      layout, cell.ui.expanded and 1 or 0 }, ":")
     local toggle_hint = cell.ui.virt_more and output_toggle_hint(cell.buf, context) or nil
     local cache_key = key .. ":" .. (toggle_hint or "")
     if not force and cell.ui.virt_mark and cell.ui.virt_key == cache_key then
@@ -230,6 +234,7 @@ return function(state, rich)
       padding_top = 1,
       width = width,
       height = info.height,
+      expanded = cell.ui.expanded,
       output_toggle_hint = function() return output_toggle_hint(cell.buf, context) end,
     }
     local lines, _, more_rows = rich.render_body(cell, shape, cell.buf, win, true)
@@ -265,6 +270,21 @@ return function(state, rich)
     local pos = vim.fn.screenpos(win, math.min(count, row + 1), 1)
     if not pos or pos.row == 0 then return end
     return math.max(0, pos.row - info.winrow)
+  end
+
+  local function output_row(source, end_pos, info, border_height, reveal)
+    local anchor_row = source_relative_row(source, end_pos.line)
+    local row = anchor_row and anchor_row + 2 or info.height
+    local minimum_height = math.min(3, number(state.options.output_win_max_height, 999999))
+    if reveal and row + border_height + minimum_height > info.height and info.height > border_height + 2 then
+      vim.api.nvim_win_call(source, function()
+        vim.api.nvim_win_set_cursor(source, { end_pos.line + 1, 0 })
+        vim.cmd("normal! zt")
+      end)
+      anchor_row = source_relative_row(source, end_pos.line)
+      row = anchor_row and anchor_row + 2 or info.height
+    end
+    return row
   end
 
   local function set_float_options(win)
@@ -310,20 +330,15 @@ return function(state, rich)
     if not valid_win(source) or vim.api.nvim_win_get_buf(source) ~= cell.buf then return false end
     local info = vim.fn.getwininfo(source)[1]
     if not info then return false end
+    if float and valid_win(float.win) and cell.ui.expanded and state.options.virt_text_output
+      and not focus and vim.api.nvim_get_current_win() == source then
+      M.leave(cell)
+      return true
+    end
 
     local border = rich.border_with_highlight(vim.deepcopy(state.options.output_win_border), cell)
     local border_width, border_height = border_size(border)
-    local anchor_row = source_relative_row(source, end_pos.line)
-    local row = anchor_row and anchor_row + 2 or info.height
-    local minimum_height = math.min(3, number(state.options.output_win_max_height, 999999))
-    if reveal and row + border_height + minimum_height > info.height and info.height > border_height + 2 then
-      vim.api.nvim_win_call(source, function()
-        vim.api.nvim_win_set_cursor(source, { end_pos.line + 1, 0 })
-        vim.cmd("normal! zt")
-      end)
-      anchor_row = source_relative_row(source, end_pos.line)
-      row = anchor_row and anchor_row + 2 or info.height
-    end
+    local row = output_row(source, end_pos, info, border_height, reveal)
     local screen_height = info.height - row - border_height
     local available_height = math.min(screen_height, number(state.options.output_win_max_height, 999999))
     local available_width = math.min(info.width - border_width, number(state.options.output_win_max_width, 999999))
@@ -354,6 +369,7 @@ return function(state, rich)
     end
 
     local display_buf = float and float.buf
+    local previous_view = not (float and valid_win(float.win)) and cell.ui.float_view
     local previous_cursor
     local was_at_bottom = false
     if float and valid_win(float.win) and valid_buf(display_buf) then
@@ -418,9 +434,7 @@ return function(state, rich)
       float = { buf = display_buf, win = win, source_win = source }
       cell.ui.float = float
       set_float_options(win)
-      local leave = function()
-        if valid_win(float.source_win) then pcall(vim.api.nvim_set_current_win, float.source_win) end
-      end
+      local leave = function() M.leave(cell) end
       vim.keymap.set("n", "q", leave, { buffer = display_buf, silent = true, nowait = true, desc = "return to notebook" })
       vim.keymap.set("n", "<Esc>", leave,
         { buffer = display_buf, silent = true, nowait = true, desc = "return to notebook" })
@@ -447,7 +461,9 @@ return function(state, rich)
     end
     cell.ui.float_hide_lhs = hide_lhs
 
-    if previous_cursor then
+    if previous_view then
+      vim.api.nvim_win_call(float.win, function() vim.fn.winrestview(previous_view) end)
+    elseif previous_cursor then
       local last = vim.api.nvim_buf_line_count(display_buf)
       local target = was_at_bottom and last or math.min(previous_cursor[1], last)
       pcall(vim.api.nvim_win_set_cursor, float.win, { math.max(1, target), 0 })
@@ -471,10 +487,12 @@ return function(state, rich)
     local cell = state.find_cell(cell_id)
     if not cell then return false end
     local behavior = state.options.enter_output_behavior
-    local existed = cell.ui.float and valid_win(cell.ui.float.win)
+    local has_float = cell.ui.float and valid_win(cell.ui.float.win)
+    local existed = has_float or cell.ui.expanded
     if not existed and behavior == "no_open" then return false end
     cell.ui.hidden = false
-    if not existed then
+    cell.ui.expanded = true
+    if not has_float then
       local buffer = state.buffers[cell.buf]
       for _, candidate in ipairs(buffer and buffer.order or {}) do
         if candidate.ui.float and valid_win(candidate.ui.float.win) then
@@ -484,19 +502,45 @@ return function(state, rich)
       end
     end
     local focus = existed or behavior == "open_and_enter"
+    if not focus and state.options.virt_text_output then
+      local source = source_window(cell.buf)
+      local info = valid_win(source) and vim.fn.getwininfo(source)[1]
+      local end_pos = output_end(cell)
+      if info and end_pos then
+        local _, border_height = border_size(state.options.output_win_border)
+        output_row(source, end_pos, info, border_height, true)
+      end
+      M.show_virtual(cell, true)
+      return cell.ui.virt_mark ~= nil
+    end
     return M.render_float(cell, focus, true)
+  end
+
+  function M.leave(cell)
+    local float = cell.ui.float
+    if not float then return false end
+    local source = float.source_win
+    if state.options.virt_text_output then
+      cell.ui.expanded = true
+      M.close_float(cell, false)
+      M.show_virtual(cell, true)
+    end
+    if valid_win(source) then vim.api.nvim_set_current_win(source) end
+    return true
   end
 
   function M.toggle_open(cell_id)
     local cell = state.find_cell(cell_id)
     if not cell then return false end
-    local already_open = cell.ui.float and valid_win(cell.ui.float.win)
+    local already_open = (cell.ui.float and valid_win(cell.ui.float.win)) or cell.ui.expanded
     if not already_open and output_end(cell) == nil then return false end
     if not already_open and state.options.enter_output_behavior == "no_open" then
       return false
     end
     if already_open then
+      cell.ui.expanded = false
       M.close_float(cell, true)
+      cell.ui.float_view = nil
       if not cell.ui.hidden then M.show_virtual(cell, true) end
       return true
     end
@@ -515,6 +559,7 @@ return function(state, rich)
     local target = explicit and state.find_cell(cell_id) or nil
     if target then
       target.ui.hidden = true
+      target.ui.expanded = false
       M.clear_virtual(target)
       hidden = true
     end
@@ -527,6 +572,7 @@ return function(state, rich)
         end
       end
     end
+    if target then target.ui.float_view = nil end
     return hidden
   end
 

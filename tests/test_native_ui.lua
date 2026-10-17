@@ -355,6 +355,13 @@ assert(full_output, "click must create an output buffer")
 assert(table.concat(vim.api.nvim_buf_get_lines(full_output, 0, -1, false), "\n"):find("last traceback line", 1, true),
   "expanded output must contain the traceback tail")
 assert(vim.api.nvim_get_current_win() == trace_float, "opening output must focus the output view")
+vim.api.nvim_win_set_cursor(trace_float, { 5, 2 })
+vim.api.nvim_win_call(trace_float, function()
+  local view = vim.fn.winsaveview()
+  view.topline, view.lnum, view.col = 3, 5, 2
+  vim.fn.winrestview(view)
+end)
+local output_view = vim.api.nvim_win_call(trace_float, vim.fn.winsaveview)
 local output_maps = vim.api.nvim_buf_get_keymap(full_output, "n")
 local return_to_source, toggle_output
 for _, map in ipairs(output_maps) do
@@ -363,16 +370,86 @@ for _, map in ipairs(output_maps) do
 end
 assert(return_to_source and toggle_output, "output view must map return and the notebook's actual toggle key")
 return_to_source()
-assert(vim.api.nvim_get_current_win() == source_win and vim.api.nvim_win_is_valid(trace_float),
-  "q or Esc must return to the source and keep expanded output open")
-assert(require("ipynb.native").call("IpynbBufLeave", { full_output }) == false
-    and vim.api.nvim_win_is_valid(trace_float),
-  "leaving the output buffer must not collapse its expanded view")
-vim.api.nvim_set_current_win(trace_float)
-require("ipynb.native").call("IpynbToggleOutput")
 assert(vim.api.nvim_get_current_win() == source_win and not vim.api.nvim_win_is_valid(trace_float),
+  "q or Esc must return to the source and close the detached output window")
+local function anchored_output_text()
+  local ns = vim.api.nvim_get_namespaces()["ipynb-native-output"]
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns,
+      { trace_mark.mark[2], 0 }, { trace_mark.mark[2], -1 }, { details = true })) do
+    if mark[4].virt_lines then
+      local text = {}
+      for _, line in ipairs(mark[4].virt_lines) do
+        for _, chunk in ipairs(line) do text[#text + 1] = chunk[1] end
+        text[#text + 1] = "\n"
+      end
+      return table.concat(text)
+    end
+  end
+end
+local expanded_text = assert(anchored_output_text(), "expanded output must stay attached to its source cell")
+assert(expanded_text:find("NameError", 1, true) and expanded_text:find("last traceback line", 1, true)
+    and not expanded_text:find("More lines", 1, true),
+  "returning from the output browser must show the complete output inline")
+assert(ui.open("traceback"), "the source cell must reopen its output browser")
+assert(vim.wait(500, function()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_config(win).relative ~= "" then return true end
+  end
+  return false
+end), "opening an already expanded output must recreate its browser")
+local reopened_output, reopened_float
+for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  if vim.api.nvim_win_get_config(win).relative ~= "" then
+    reopened_output, reopened_float = vim.api.nvim_win_get_buf(win), win
+  end
+end
+assert(reopened_output and table.concat(vim.api.nvim_buf_get_lines(reopened_output, 0, -1, false), "\n")
+    :find("last traceback line", 1, true), "reopening the browser must retain the full output")
+local reopened_view = vim.api.nvim_win_call(reopened_float, vim.fn.winsaveview)
+assert(reopened_view.topline == output_view.topline and reopened_view.lnum == output_view.lnum
+    and reopened_view.col == output_view.col, "reopening must restore the output cursor and scroll position")
+output_maps = vim.api.nvim_buf_get_keymap(reopened_output, "n")
+return_to_source, toggle_output = nil, nil
+for _, map in ipairs(output_maps) do
+  if map.lhs == "q" or map.lhs == "<Esc>" then return_to_source = map.callback end
+  if map.lhs == "yy" then toggle_output = map.callback end
+end
+assert(return_to_source and toggle_output, "reopened output must keep return and mapped toggle keys")
+return_to_source()
+assert(vim.api.nvim_get_current_win() == source_win and not vim.api.nvim_win_is_valid(reopened_float),
+  "the output browser must always return to its source without a detached window")
+assert(anchored_output_text() == expanded_text, "reopening and leaving the browser must preserve expanded output")
+local filler = {}
+for index = 1, 80 do filler[index] = "scroll filler " .. index end
+vim.api.nvim_buf_set_lines(buf, -1, -1, false, filler)
+vim.api.nvim_win_set_cursor(source_win, { vim.api.nvim_buf_line_count(buf), 0 })
+vim.api.nvim_win_call(source_win, function() vim.cmd("normal! zt") end)
+assert(vim.fn.screenpos(source_win, trace_mark.mark[2] + 1, 1).row == 0,
+  "the output source anchor must be above the viewport during the scroll regression check")
+ui.refresh(buf)
+vim.api.nvim_win_set_cursor(source_win, { trace_mark.mark[2] + 1, 0 })
+vim.api.nvim_win_call(source_win, function() vim.cmd("normal! zt") end)
+ui.refresh(buf)
+assert(anchored_output_text() == expanded_text,
+  "scrolling the expanded output anchor out of view and back must preserve every line")
+assert(ui.open("traceback"), "the output browser must reopen after scrolling")
+reopened_float = nil
+for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  if vim.api.nvim_win_get_config(win).relative ~= "" then reopened_float = win end
+end
+assert(reopened_float and vim.api.nvim_get_current_win() == reopened_float,
+  "opening output must focus the browser")
+reopened_output = vim.api.nvim_win_get_buf(reopened_float)
+for _, map in ipairs(vim.api.nvim_buf_get_keymap(reopened_output, "n")) do
+  if map.lhs == "yy" then toggle_output = map.callback end
+end
+assert(toggle_output, "reopened output must keep the remapped toggle")
+toggle_output()
+assert(vim.api.nvim_get_current_win() == source_win and not vim.api.nvim_win_is_valid(reopened_float),
   "the mapped toggle must collapse expanded output and return to the source")
-assert(output_details(), "collapsing expanded output must restore the inline preview")
+local collapsed_text = assert(anchored_output_text(), "collapsed output must restore its inline preview")
+assert(collapsed_text:find("More lines", 1, true) and not collapsed_text:find("last traceback line", 1, true),
+  "collapsing expanded output must restore the truncated preview")
 vim.fn.getmousepos = function()
   return { winid = source_win, screenrow = base.row, screencol = 1 }
 end
@@ -407,13 +484,20 @@ assert(vim.wait(500, function()
 end), "the More lines row must remain clickable when its anchor has scrolled into topfill")
 assert(table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false), "\n")
   :find("last traceback line", 1, true), "scrolled expansion must retain the traceback tail")
+toggle_output()
+local output_still_open = false
+for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  if vim.api.nvim_win_get_config(win).relative ~= "" then output_still_open = true end
+end
+assert(not output_still_open, "the mapped toggle must collapse before custom mouse mappings are checked")
 local rhs = "<Cmd>let g:ipynb_mouse_rhs=1<CR>"
 vim.api.nvim_buf_set_keymap(buf, "n", "<LeftMouse>", rhs, { noremap = true, silent = true })
-assert(ui.hide(), "second output float must close before checking string mouse mappings")
+assert(ui.show("traceback") and ui.hide(), "output must redraw after installing a string mouse fallback")
 for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
   if map.lhs == "<LeftMouse>" then click = map.callback; break end
 end
 vim.fn.getmousepos = function() return { winid = source_win, screenrow = 0, screencol = 1 } end
+assert(click, "string mouse fallback must remain wrapped")
 local mapped_rhs = click()
 vim.fn.getmousepos = mouse
 assert(mapped_rhs == vim.api.nvim_replace_termcodes(rhs, true, false, true),
@@ -427,6 +511,52 @@ vim.fn.getmousepos = function() return { winid = source_win, screenrow = 0, scre
 local mapped_expression = click()
 vim.fn.getmousepos = mouse
 assert(mapped_expression == "mapped", "ordinary clicks must retain a previous expression mapping")
+ui.configure({ enter_output_behavior = "open_then_enter", virt_text_output = true })
+vim.api.nvim_win_set_cursor(source_win, { vim.api.nvim_buf_line_count(buf), 0 })
+vim.api.nvim_win_call(source_win, function() vim.cmd("normal! zt") end)
+assert(ui.open("traceback") and vim.api.nvim_get_current_win() == source_win and anchored_output_text()
+    :find("last traceback line", 1, true),
+  "open_then_enter must first show the complete output inline without moving focus")
+assert(vim.api.nvim_win_get_cursor(source_win)[1] < vim.api.nvim_buf_line_count(buf) - 20,
+  "opening offscreen output without entering must still reveal its source anchor")
+assert(ui.open("traceback"), "the second open_then_enter action must open the browser")
+local behavior_float
+for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  if vim.api.nvim_win_get_config(win).relative ~= "" then behavior_float = win end
+end
+assert(behavior_float and vim.api.nvim_get_current_win() == behavior_float,
+  "the second open_then_enter action must focus the browser")
+for _, map in ipairs(vim.api.nvim_buf_get_keymap(vim.api.nvim_win_get_buf(behavior_float), "n")) do
+  if map.lhs == "q" then return_to_source = map.callback end
+  if map.lhs == "yy" then toggle_output = map.callback end
+end
+assert(return_to_source and toggle_output, "configured output modes must retain their keyboard controls")
+return_to_source()
+assert(anchored_output_text():find("last traceback line", 1, true),
+  "q must retain complete inline output after open_then_enter")
+assert(ui.toggle_open("traceback") and anchored_output_text():find("More lines", 1, true),
+  "the source toggle must collapse expanded output")
+ui.configure({ enter_output_behavior = "no_open" })
+assert(not ui.open("traceback"), "no_open must continue to prevent opening an output browser")
+ui.configure({ enter_output_behavior = "open_and_enter", virt_text_output = false })
+assert(ui.open("traceback"), "disabling virtual output must keep the floating browser available")
+local configured_float
+for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  if vim.api.nvim_win_get_config(win).relative ~= "" then configured_float = win end
+end
+assert(configured_float, "virt_text_output=false must create the configured output window")
+local configured_output = vim.api.nvim_win_get_buf(configured_float)
+for _, map in ipairs(vim.api.nvim_buf_get_keymap(configured_output, "n")) do
+  if map.lhs == "q" then return_to_source = map.callback end
+  if map.lhs == "yy" then toggle_output = map.callback end
+end
+assert(return_to_source and toggle_output, "floating-only output must keep its keyboard controls")
+return_to_source()
+assert(vim.api.nvim_get_current_win() == source_win and vim.api.nvim_win_is_valid(configured_float),
+  "q must retain the floating output when virtual output is disabled")
+toggle_output()
+assert(not vim.api.nvim_win_is_valid(configured_float), "the mapped toggle must still close floating-only output")
+ui.configure({ virt_text_output = true, enter_output_behavior = "open_and_enter" })
 ui.shutdown()
 ui.configure({})
 package.loaded["ipynb.molten_load_image_nvim"].image_api.clear_all = nil

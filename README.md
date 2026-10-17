@@ -43,12 +43,12 @@ Open `nvim example.ipynb`. Keys use Normal mode unless noted; `<localleader>` de
 | `<localleader>b` | Add code cell below. |
 | `<localleader>m` | Add Markdown cell below. |
 | `<localleader>s` | Interrupt execution. |
-| `<localleader>o` | Open or focus the current cell output; collapse it from the output view. |
+| `<localleader>o` | Expand or collapse the current cell output. |
 | `<localleader>O` | Close the expanded output. |
 | `<localleader>x` | Open image or HTML output. |
 | `<localleader>i` | Restart kernel and clear variables. |
 | `j` / `k`, `Ctrl+D` / `Ctrl+U` in output view | Browse output. |
-| `q` or `Esc` in output view | Return to the notebook; output stays expanded. |
+| `q` or `Esc` in output view | Return with full output anchored below its cell. |
 | `<localleader>o` in output view | Collapse the current output. |
 | `q` or `Esc` in image viewer | Close the image viewer. |
 | `zo` / `zc` | Open / close metadata. |

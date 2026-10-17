@@ -398,7 +398,7 @@ return function(state)
           remaining = math.max(0, remaining - #joined)
         end
         lines = wrap_lines(vim.split(joined, "\n", { plain = true }), content_width)
-        if virtual then
+        if virtual and not shape.expanded then
           local more_row
           lines, more_row = truncate_lines(lines, shape.output_toggle_hint, content_width)
           if more_row then more_rows[#more_rows + 1] = #body + more_row + 1 end
