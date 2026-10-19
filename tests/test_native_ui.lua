@@ -36,6 +36,34 @@ ui.shutdown()
 assert(package.loaded["ipynb.molten_load_image_nvim"] == nil and package.loaded["ipynb.image_viewer"] == nil,
   "empty shutdown must not load an adapter or viewer")
 ui.configure({ image_provider = "none" })
+local full_output = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_set_current_buf(full_output)
+vim.api.nvim_buf_set_lines(full_output, 0, -1, false, { "print('rows')", "" })
+local rows = {}
+for index = 1, 10000 do rows[index] = "output row " .. index end
+local function rendered_rows()
+  assert(ui.sync(full_output, { { id = "full-output", begin = { 0, 0 }, ["end"] = { 0, 13 },
+    status = "done", success = true, lines = rows } }))
+  local text = {}
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(full_output,
+    vim.api.nvim_get_namespaces()["ipynb-native-output"], 0, -1, { details = true })) do
+    for _, line in ipairs(mark[4].virt_lines or {}) do
+      for _, chunk in ipairs(line) do text[#text + 1] = chunk[1] end
+    end
+  end
+  return table.concat(text, "\n")
+end
+local complete = rendered_rows()
+assert(complete:find("output row 10000", 1, true) and not complete:find("More lines", 1, true),
+  "ordinary output must remain complete through the default 10,000 row boundary")
+rows[#rows + 1] = "output row 10001"
+local bounded = rendered_rows()
+assert(bounded:find("output row 1", 1, true) and bounded:find("More lines", 1, true)
+  and not bounded:find("output row 10001", 1, true), "runaway output must retain a bounded preview")
+assert(vim.deep_equal(vim.api.nvim_buf_get_lines(full_output, 0, -1, false), { "print('rows')", "" }),
+  "output limits must not change notebook source")
+ui.clear(full_output)
+vim.api.nvim_buf_delete(full_output, { force = true })
 local formatted = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_buf_set_lines(formatted, 0, -1, false, { "```python", "print(1)", "```", "", "```python", "print(2)", "```" })
 ui.sync(formatted, {

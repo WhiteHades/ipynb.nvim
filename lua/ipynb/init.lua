@@ -359,7 +359,7 @@ function M.init(opts)
     auto_setup = true,
     numpy_legacy_repr = true,
     keymaps = true,
-    output = { preview_lines = 8 },
+    output = { preview_lines = 10002 },
   }, opts or {})
   M.options.jupytext = M.options.jupytext or vim.fn.fnamemodify(M.options.python, ":h") .. "/jupytext"
   vim.g.ipynb_numpy_legacy_repr = M.options.numpy_legacy_repr

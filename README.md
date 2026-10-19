@@ -57,6 +57,8 @@ Open `nvim example.ipynb`. Keys use Normal mode unless noted; `<localleader>` de
 
 Existing mappings take precedence. Modified Enter keys depend on your terminal.
 
+Output appears in full up to 10,000 rows or 1,000,000 characters.
+
 See [configuration and saving](doc/ipynb.txt) for settings and standalone environments.
 
 [PyTorch](https://github.com/pytorch/pytorch) can use CUDA in your project kernel; notebook code selects GPU or CPU.

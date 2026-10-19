@@ -293,7 +293,7 @@ return function(state)
   end
 
   local function truncate_lines(lines, hint, width)
-    local maximum = math.max(1, number(state.options.virt_text_max_lines, 8) - 2)
+    local maximum = math.max(1, number(state.options.virt_text_max_lines, 10002) - 2)
     if #lines <= maximum then return lines end
     if type(hint) == "function" then hint = hint() end
     if state.options.virt_text_truncate == "top" and maximum > 2 then

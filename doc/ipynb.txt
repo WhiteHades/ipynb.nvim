@@ -55,9 +55,12 @@ Set python to use an existing editor helper. For example:
     keymaps = true,
     auto_init = false,
     auto_setup = true,
-    output = { preview_lines = 8 },
+    output = { preview_lines = 10002 },
   }
 <
+Output shows up to 10,000 text rows by default, plus two border rows.
+The 1,000,000 character limit also bounds unusually large output.
+
 Python notebooks with a generic python3 kernel use the nearest project's
 .venv. For standalone notebooks, the notebook directory is the project root.
 
