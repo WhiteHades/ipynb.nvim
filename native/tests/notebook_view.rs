@@ -68,7 +68,7 @@ local ok, err = xpcall(function()
     python_indent(14), python_indent(15)}
   assert(vim.deep_equal(nested_indents, {4, 8, 8, 4, 8, 12, 12, 8, 8}),
     'if, with, multiline, and return indentation must follow Python syntax: ' .. vim.inspect(nested_indents))
-  local function replay(filetype, lines, keys)
+  local function replay(filetype, lines, keys, paste)
     local target = vim.api.nvim_create_buf(false, true)
     local source = filetype == 'markdown' and vim.list_extend({'```python'}, vim.deepcopy(lines)) or lines
     if filetype == 'markdown' then source[#source + 1] = '```' end
@@ -85,6 +85,7 @@ local ok, err = xpcall(function()
     vim.api.nvim_set_current_buf(target)
     vim.api.nvim_win_set_cursor(0, {filetype == 'markdown' and #lines + 1 or #lines, #lines[#lines]})
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), 'mtx', false)
+    if paste then assert(vim.api.nvim_paste(paste, false, -1)) end
     local result = vim.api.nvim_buf_get_lines(target, 0, -1, false)
     if filetype == 'markdown' then
       table.remove(result, #result)
@@ -103,10 +104,19 @@ local ok, err = xpcall(function()
     {'double newline', {'def f():'}, 'A<CR><CR>pass<Esc>'},
     {'intentional Ctrl-D dedent', {'def f():', '    return 1'}, 'A<CR><C-D>pass<Esc>'},
     {'closed triple quote', {'text = """done"""'}, 'A<CR>next = 1<Esc>'},
+    {'unfinished dictionary', {'values = {', '    "a": 1,'}, 'A<CR>"b": 2,<Esc>'},
+    {'nested return', {'def f():', '    if ready:', '        return 1'}, 'A<CR>return 2<Esc>'},
+    {'return argument', {'def f():', '    return call(', '        1,', '    )'},
+      'kA<CR>2,<Esc>'},
+    {'completion acceptance', {'def f():'},
+      'A<CR><Cmd>lua vim.fn.complete(5, {"known_name"})<CR><C-n><C-y><CR>next_value = 2<Esc>'},
+    {'backslash continuation', {'value = first + \\'}, 'A<CR>second<Esc>'},
+    {'unfinished string', {'def f():', '    text = """', '    literal:'}, 'A<CR>literal<Esc>'},
+    {'paste', {'def f():', '    pass'}, 'A<CR><Esc>', '    value = [\n        1,\n    ]'},
   }
   for _, case in ipairs(replays) do
-    local native = replay('python', case[2], case[3])
-    local notebook = replay('markdown', case[2], case[3])
+    local native = replay('python', case[2], case[3], case[4])
+    local notebook = replay('markdown', case[2], case[3], case[4])
     assert(vim.deep_equal(notebook, native), case[1] .. ' mapped Enter replay differs: native='
       .. vim.inspect(native) .. ' notebook=' .. vim.inspect(notebook))
   end
