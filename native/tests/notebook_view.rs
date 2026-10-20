@@ -51,6 +51,8 @@ local ok, err = xpcall(function()
   vim.b[indent_buf].notebook_markdown = true
   vim.bo[indent_buf].shiftwidth, vim.bo[indent_buf].tabstop = 2, 2
   vim.bo[indent_buf].expandtab = true
+  local markdown_comments = {vim.bo[indent_buf].comments, vim.bo[indent_buf].commentstring,
+    vim.bo[indent_buf].formatoptions}
   indent.attach(indent_buf)
   vim.api.nvim_set_current_buf(indent_buf)
   vim.api.nvim_win_set_cursor(0, {4, 0})
@@ -66,6 +68,57 @@ local ok, err = xpcall(function()
     python_indent(14), python_indent(15)}
   assert(vim.deep_equal(nested_indents, {4, 8, 8, 4, 8, 12, 12, 8, 8}),
     'if, with, multiline, and return indentation must follow Python syntax: ' .. vim.inspect(nested_indents))
+  local function replay(filetype, lines, keys)
+    local target = vim.api.nvim_create_buf(false, true)
+    local source = filetype == 'markdown' and vim.list_extend({'```python'}, vim.deepcopy(lines)) or lines
+    if filetype == 'markdown' then source[#source + 1] = '```' end
+    vim.api.nvim_buf_set_lines(target, 0, -1, false, source)
+    vim.bo[target].filetype = filetype
+    if filetype == 'markdown' then
+      vim.b[target].notebook_markdown = true
+      keeper.rafts[target] = {buffers={python=embedded}}
+      vim.bo[target].shiftwidth = python_options.shiftwidth
+      vim.bo[target].tabstop = python_options.tabstop
+      vim.bo[target].expandtab = python_options.expandtab
+      indent.attach(target)
+    end
+    vim.api.nvim_set_current_buf(target)
+    vim.api.nvim_win_set_cursor(0, {filetype == 'markdown' and #lines + 1 or #lines, #lines[#lines]})
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), 'mtx', false)
+    local result = vim.api.nvim_buf_get_lines(target, 0, -1, false)
+    if filetype == 'markdown' then
+      table.remove(result, #result)
+      table.remove(result, 1)
+      keeper.rafts[target] = nil
+    end
+    vim.api.nvim_buf_delete(target, {force=true})
+    return result
+  end
+  local replays = {
+    {'comment continuation', {'def f():', '    value = 1', '    # note:'}, 'A<CR>next<Esc>'},
+    {'single function', {'def f():'}, 'A<CR>return 1<Esc>'},
+    {'typed signature', {'def f(', '    value: int,', '    name: str,'}, 'A<CR>) -> bool:<CR>return True<Esc>'},
+    {'nested if', {'def f():', '    if ready:', '        value = 1'}, 'A<CR>return value<Esc>'},
+    {'bracket continuation', {'values = [', '    1,'}, 'A<CR>2,<CR>]<Esc>'},
+    {'double newline', {'def f():'}, 'A<CR><CR>pass<Esc>'},
+    {'intentional Ctrl-D dedent', {'def f():', '    return 1'}, 'A<CR><C-D>pass<Esc>'},
+    {'closed triple quote', {'text = """done"""'}, 'A<CR>next = 1<Esc>'},
+  }
+  for _, case in ipairs(replays) do
+    local native = replay('python', case[2], case[3])
+    local notebook = replay('markdown', case[2], case[3])
+    assert(vim.deep_equal(notebook, native), case[1] .. ' mapped Enter replay differs: native='
+      .. vim.inspect(native) .. ' notebook=' .. vim.inspect(notebook))
+  end
+  vim.api.nvim_set_current_buf(indent_buf)
+  vim.api.nvim_win_set_cursor(0, {1, 0})
+  vim.api.nvim_exec_autocmds('CursorMoved', {buffer=indent_buf})
+  assert(vim.bo[indent_buf].comments == markdown_comments[1]
+    and vim.bo[indent_buf].commentstring == markdown_comments[2]
+    and vim.bo[indent_buf].formatoptions == markdown_comments[3],
+    'leaving Python must restore Markdown comment and format settings')
+  vim.api.nvim_win_set_cursor(0, {4, 0})
+  vim.api.nvim_exec_autocmds('CursorMoved', {buffer=indent_buf})
   local code_win = vim.api.nvim_get_current_win()
   vim.cmd('vsplit')
   local prose_win = vim.api.nvim_get_current_win()

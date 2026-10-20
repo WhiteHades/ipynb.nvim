@@ -3,6 +3,7 @@ local M = {}
 local indent_options = {
   "shiftwidth", "tabstop", "softtabstop", "expandtab", "indentexpr", "indentkeys",
   "autoindent", "smartindent", "cindent",
+  "comments", "commentstring", "formatoptions",
 }
 local markdown_query
 
