@@ -1,6 +1,7 @@
 local M = {}
 
 local position_ns = vim.api.nvim_create_namespace("ipynb-native-positions")
+local view_ns = vim.api.nvim_create_namespace("ipynb-native-save-views")
 local output_ns = vim.api.nvim_create_namespace("ipynb-native-output")
 local highlight_ns = vim.api.nvim_create_namespace("ipynb-native-highlight")
 local buffers = {}
@@ -371,15 +372,23 @@ end
 function M.with_positions(buf, callback)
   local before = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local marks = vim.api.nvim_buf_get_extmarks(buf, position_ns, 0, -1, { details = true })
+  local views = {}
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    views[#views + 1] = { win = win, view = vim.api.nvim_win_call(win, vim.fn.winsaveview) }
+  end
   local ok, err = xpcall(callback, debug.traceback)
-  if valid_buf(buf) and #marks > 0 then
+  if valid_buf(buf) and (#marks > 0 or #views > 0) then
     local after = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    -- Reapply save-hook changes as a minimal diff so whole-buffer formatters
-    -- cannot collapse every output anchor to the beginning of the notebook.
+    -- Replay minimal edits on a shadow buffer to preserve anchors and editor views.
     local shadow = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(shadow, 0, -1, false, before)
     for _, mark in ipairs(marks) do
       set_position(shadow, { line = mark[2], col = mark[3] }, mark[1], mark[4].right_gravity)
+    end
+    for _, item in ipairs(views) do
+      local view = item.view
+      item.cursor = vim.api.nvim_buf_set_extmark(shadow, view_ns, view.lnum - 1, view.col, {})
+      item.topline = vim.api.nvim_buf_set_extmark(shadow, view_ns, view.topline - 1, 0, {})
     end
     local changes = vim.diff(table.concat(before, "\n") .. "\n", table.concat(after, "\n") .. "\n",
       { result_type = "indices", algorithm = "histogram" })
@@ -387,10 +396,36 @@ function M.with_positions(buf, callback)
       local change = changes[index]
       local start = change[1] - (change[2] > 0 and 1 or 0)
       local replacement = vim.list_slice(after, change[3], change[3] + change[4] - 1)
-      vim.api.nvim_buf_set_lines(shadow, start, start + change[2], false, replacement)
+      if change[2] > 0 and #replacement > 0 then
+        local first, last = before[start + 1], before[start + change[2]]
+        local prefix, suffix = 0, 0
+        while prefix < math.min(#first, #replacement[1])
+          and first:byte(prefix + 1) == replacement[1]:byte(prefix + 1) do prefix = prefix + 1 end
+        local old_limit = #last - (change[2] == 1 and prefix or 0)
+        local new_limit = #replacement[#replacement] - (#replacement == 1 and prefix or 0)
+        while suffix < math.min(old_limit, new_limit)
+          and last:byte(#last - suffix) == replacement[#replacement]:byte(#replacement[#replacement] - suffix) do
+          suffix = suffix + 1
+        end
+        replacement[1] = replacement[1]:sub(prefix + 1)
+        replacement[#replacement] = replacement[#replacement]:sub(1, #replacement[#replacement] - suffix)
+        vim.api.nvim_buf_set_text(shadow, start, prefix, start + change[2] - 1, #last - suffix, replacement)
+      else
+        vim.api.nvim_buf_set_lines(shadow, start, start + change[2], false, replacement)
+      end
     end
     for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(shadow, position_ns, 0, -1, { details = true })) do
       set_position(buf, { line = mark[2], col = mark[3] }, mark[1], mark[4].right_gravity)
+    end
+    for _, item in ipairs(views) do
+      if valid_win(item.win) and vim.api.nvim_win_get_buf(item.win) == buf then
+        local cursor = vim.api.nvim_buf_get_extmark_by_id(shadow, view_ns, item.cursor, {})
+        local topline = vim.api.nvim_buf_get_extmark_by_id(shadow, view_ns, item.topline, {})
+        local view = item.view
+        if view.curswant < 2147483647 then view.curswant = view.curswant + cursor[2] - view.col end
+        view.lnum, view.col, view.topline = cursor[1] + 1, cursor[2], topline[1] + 1
+        vim.api.nvim_win_call(item.win, function() vim.fn.winrestview(view) end)
+      end
     end
     vim.api.nvim_buf_delete(shadow, { force = true })
   end

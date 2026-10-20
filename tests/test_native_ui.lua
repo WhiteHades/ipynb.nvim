@@ -70,10 +70,14 @@ ui.sync(formatted, {
   { id = "format-first", begin = { 1, 0 }, ["end"] = { 1, 8 } },
   { id = "format-second", begin = { 5, 0 }, ["end"] = { 5, 8 } },
 })
+vim.api.nvim_set_current_buf(formatted)
+vim.api.nvim_win_set_cursor(0, { 6, 3 })
 ui.with_positions(formatted, function()
   vim.api.nvim_buf_set_lines(formatted, 0, -1, false,
     { "```python", "print(1)", "# formatted", "```", "", "```python", "print(2)", "```" })
 end)
+assert(vim.deep_equal(vim.api.nvim_win_get_cursor(0), { 7, 3 }),
+  "save hooks inserting lines above the cursor must keep it on the same code")
 local preserved = ui.positions(formatted)
 assert(preserved[1].begin[1] == 1 and preserved[2].begin[1] == 6,
   "whole-buffer save hooks must preserve cell identities across inserted lines")
