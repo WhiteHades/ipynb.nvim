@@ -111,7 +111,11 @@ local ok, err = xpcall(function()
     {'completion acceptance', {'def f():'},
       'A<CR><Cmd>lua vim.fn.complete(5, {"known_name"})<CR><C-n><C-y><CR>next_value = 2<Esc>'},
     {'backslash continuation', {'value = first + \\'}, 'A<CR>second<Esc>'},
+    {'completed backslash', {'value = first + \\', '        second'}, 'A<CR>next_value = 2<Esc>'},
+    {'backslash inside call', {'value = call(first + \\', '             second', ')'}, 'kA<CR>+ third<Esc>'},
     {'unfinished string', {'def f():', '    text = """', '    literal:'}, 'A<CR>literal<Esc>'},
+    {'comment inside unfinished literal', {'def f():', '    text = """', '    # note'}, 'A<CR>literal<Esc>'},
+    {'comment inside closed literal', {'text = """', '# note', '"""'}, 'kA<CR>literal<Esc>'},
     {'paste', {'def f():', '    pass'}, 'A<CR><Esc>', '    value = [\n        1,\n    ]'},
   }
   for _, case in ipairs(replays) do
@@ -120,6 +124,32 @@ local ok, err = xpcall(function()
     assert(vim.deep_equal(notebook, native), case[1] .. ' mapped Enter replay differs: native='
       .. vim.inspect(native) .. ' notebook=' .. vim.inspect(notebook))
   end
+  local boundary = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(boundary, 0, -1, false, {'```python', 'value = 1', '```'})
+  vim.bo[boundary].filetype = 'markdown'
+  vim.b[boundary].notebook_markdown = true
+  keeper.rafts[boundary] = {buffers={python=embedded}}
+  vim.bo[boundary].shiftwidth, vim.bo[boundary].tabstop = 2, 2
+  indent.attach(boundary)
+  vim.api.nvim_set_current_buf(boundary)
+  vim.api.nvim_win_set_cursor(0, {2, 0})
+  vim.api.nvim_exec_autocmds('CursorMoved', {buffer=boundary})
+  for _, fence in ipairs({'```python', '````python', '`````py'}) do
+    local delimiter = fence:match('^`+')
+    vim.api.nvim_buf_set_lines(boundary, 0, -1, false, {fence, 'value = 1', delimiter})
+    vim.api.nvim_exec_autocmds('CursorMoved', {buffer=boundary})
+    assert(vim.bo[boundary].shiftwidth == python_options.shiftwidth, 'Python fence variant lost indentation settings')
+  end
+  vim.api.nvim_buf_set_lines(boundary, 0, -1, false, {'```text', 'value = 1', '```'})
+  vim.api.nvim_exec_autocmds('CursorMoved', {buffer=boundary})
+  assert(vim.bo[boundary].shiftwidth == 2, 'editing the fence language did not restore Markdown options')
+  vim.api.nvim_buf_set_lines(boundary, 0, -1, false, {'````python', '', '````'})
+  vim.api.nvim_exec_autocmds('CursorMoved', {buffer=boundary})
+  assert(vim.bo[boundary].shiftwidth == python_options.shiftwidth, 'empty cell did not inherit Python indentation')
+  vim.api.nvim_feedkeys(vim.keycode('idef f():<CR>pass<Esc>'), 'mtx', false)
+  assert(vim.api.nvim_buf_get_lines(boundary, 2, 3, false)[1] == '    pass', 'typing in an empty cell used Markdown indentation')
+  keeper.rafts[boundary] = nil
+  vim.api.nvim_buf_delete(boundary, {force=true})
   vim.api.nvim_set_current_buf(indent_buf)
   vim.api.nvim_win_set_cursor(0, {1, 0})
   vim.api.nvim_exec_autocmds('CursorMoved', {buffer=indent_buf})
@@ -136,9 +166,14 @@ local ok, err = xpcall(function()
   vim.api.nvim_set_current_win(code_win)
   assert(vim.bo[indent_buf].shiftwidth == python_options.shiftwidth,
     'switching back to the Python window must restore Python indentation settings')
+  for name, value in pairs(python_options) do
+    assert(vim.bo[indent_buf][name] == value, 'switching windows lost Python option ' .. name)
+  end
+  assert(vim.deep_equal(vim.api.nvim_win_get_cursor(code_win), {4, 0}), 'switching options moved the Python cursor')
   vim.api.nvim_set_current_win(prose_win)
   assert(vim.bo[indent_buf].shiftwidth == 2,
     'switching to the prose window must restore Markdown indentation settings')
+  assert(vim.deep_equal(vim.api.nvim_win_get_cursor(prose_win), {1, 0}), 'switching options moved the prose cursor')
   vim.cmd('close')
   vim.api.nvim_win_set_cursor(0, {1, 0})
   vim.api.nvim_exec_autocmds('CursorMoved', {buffer=indent_buf})
